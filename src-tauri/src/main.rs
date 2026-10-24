@@ -14,9 +14,13 @@ fn main() {
     let settings: Settings = model::read_json(&root.join("settings.json")).unwrap_or_default();
 
     // WebView2 flags must be set before any webview is created.
+    let mut browser_args = String::from(
+        "--disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding",
+    );
     if !settings.hardware_acceleration {
-        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu");
+        browser_args.push_str(" --disable-gpu");
     }
+    std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", browser_args);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())

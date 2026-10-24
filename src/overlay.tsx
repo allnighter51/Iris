@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "./api";
 import type { OverlayPayload, SceneLayer } from "./types";
+import "./styles.css";
 
 const images = new Map<string, Promise<HTMLImageElement>>();
 
@@ -23,8 +24,7 @@ function loadImage(path: string): Promise<HTMLImageElement> {
 /**
  * The transparent click-through window. Whether it shows one PNG or a whole
  * layer stack, everything is composited onto ONE canvas, and only when the
- * state changes. While idle there is no JS work, no animation loop and no
- * per-layer DOM — the compositor just presents a single static surface.
+ * state changes.
  */
 function Overlay() {
   const [p, setP] = useState<OverlayPayload | null>(null);
@@ -88,8 +88,35 @@ function Overlay() {
 
   const W = p?.monitorW ?? 1;
   const H = p?.monitorH ?? 1;
-  const isChroma = p?.state.transform.chromaCycle;
-  const chromaDuration = p?.state.transform.chromaSpeed || 6;
+  const isChroma = Boolean(
+    p?.state.transform?.chromaCycle ||
+    p?.state.scene?.some((l) => l.transform?.chromaCycle)
+  );
+  const chromaDuration = p?.state.transform?.chromaSpeed || 6;
+  const shouldAnimate = isChroma && Boolean(p?.visible);
+
+  // Smooth real-time rainbow hue-cycle animation directly on the canvas element
+  useEffect(() => {
+    const c = canvas.current;
+    if (!c) return;
+    if (!shouldAnimate) {
+      c.style.filter = "";
+      return;
+    }
+    let raf: number;
+    const start = performance.now();
+    const periodMs = (chromaDuration || 6) * 1000;
+    const tick = (now: number) => {
+      const deg = (((now - start) % periodMs) / periodMs) * 360;
+      c.style.filter = `hue-rotate(${deg.toFixed(1)}deg)`;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      c.style.filter = "";
+    };
+  }, [shouldAnimate, chromaDuration]);
 
   return (
     <canvas
@@ -101,7 +128,6 @@ function Overlay() {
         width: W / dpr,
         height: H / dpr,
         pointerEvents: "none",
-        animation: isChroma ? `irisRainbow ${chromaDuration}s linear infinite` : undefined,
       }}
     />
   );
