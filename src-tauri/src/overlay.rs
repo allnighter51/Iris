@@ -1,0 +1,121 @@
+//! Overlay window lifecycle: a single frameless, transparent, click-through
+//! window per app that only renders the active PNG.
+
+use crate::{model::*, win32};
+use serde::Serialize;
+use std::sync::atomic::Ordering;
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+
+pub const LABEL: &str = "overlay";
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayPayload {
+    pub state: OverlayState,
+    pub visible: bool,
+    pub monitor_w: i32,
+    pub monitor_h: i32,
+    pub low_res: bool,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayStatus {
+    pub enabled: bool,
+    pub visible: bool,
+    pub game_running: bool,
+}
+
+/// Must be called on the main thread (setup). The window starts hidden.
+pub fn create_window(app: &AppHandle) -> tauri::Result<()> {
+    let win = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("overlay.html".into()))
+        .title("Iris Overlay")
+        .transparent(true)
+        .decorations(false)
+        .shadow(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .focused(false)
+        .visible(false)
+        .build()?;
+    let _ = win.set_ignore_cursor_events(true);
+    if let Ok(h) = win.hwnd() {
+        win32::apply_overlay_styles(h.0 as isize);
+    }
+    Ok(())
+}
+
+fn monitor_rect(app: &AppHandle, idx: usize) -> (i32, i32, i32, i32) {
+    let mons = app.available_monitors().unwrap_or_default();
+    match mons.get(idx).or(mons.first()) {
+        Some(m) => {
+            let (p, s) = (m.position(), m.size());
+            (p.x, p.y, s.width as i32, s.height as i32)
+        }
+        None => (0, 0, 1920, 1080),
+    }
+}
+
+/// Recompute visibility/placement from stored state and push to both windows.
+pub fn refresh(app: &AppHandle) {
+    let st = app.state::<AppState>();
+    let o = st.overlay.lock().unwrap().clone();
+    let s = st.settings.lock().unwrap().clone();
+    let game = st.game_running.load(Ordering::Relaxed);
+    let (mx, my, mw, mh) = monitor_rect(app, o.monitor);
+    let visible = o.enabled && o.has_content() && (s.target_mode != "game" || game);
+
+    if let Some(win) = app.get_webview_window(LABEL) {
+        place_and_show(&win, &st, (mx, my, mw, mh), visible, s.hide_from_capture);
+    }
+    let _ = app.emit_to(
+        LABEL,
+        "overlay-state",
+        OverlayPayload { state: o.clone(), visible, monitor_w: mw, monitor_h: mh, low_res: s.low_resource },
+    );
+    let _ = app.emit_to("main", "overlay-status", OverlayStatus { enabled: o.enabled, visible, game_running: game });
+}
+
+fn place_and_show(win: &WebviewWindow, st: &AppState, rect: (i32, i32, i32, i32), visible: bool, excl: bool) {
+    let Ok(h) = win.hwnd() else { return };
+    let raw = h.0 as isize;
+    {
+        let mut last = st.last_rect.lock().unwrap();
+        if *last != Some(rect) {
+            win32::place(raw, rect.0, rect.1, rect.2, rect.3);
+            *last = Some(rect);
+        }
+    }
+    win32::set_capture_excluded(raw, excl);
+    if visible {
+        win32::show(raw);
+    } else {
+        win32::hide(raw);
+    }
+}
+
+pub fn toggle(app: &AppHandle) {
+    {
+        let st = app.state::<AppState>();
+        let mut o = st.overlay.lock().unwrap();
+        o.enabled = !o.enabled;
+    }
+    refresh(app);
+}
+
+#[tauri::command]
+pub fn overlay_apply(app: AppHandle, state: State<AppState>, overlay: OverlayState) {
+    *state.overlay.lock().unwrap() = overlay;
+    refresh(&app);
+}
+
+#[tauri::command]
+pub fn overlay_get(app: AppHandle, state: State<AppState>) -> OverlayPayload {
+    let o = state.overlay.lock().unwrap().clone();
+    let s = state.settings.lock().unwrap().clone();
+    let (_, _, mw, mh) = monitor_rect(&app, o.monitor);
+    let game = state.game_running.load(Ordering::Relaxed);
+    let visible = o.enabled && o.has_content() && (s.target_mode != "game" || game);
+    OverlayPayload { state: o, visible, monitor_w: mw, monitor_h: mh, low_res: s.low_resource }
+}
