@@ -95,7 +95,84 @@ export interface Layer {
   scale: number;
   opacity: number;
   hue: number;
+  /** non-destructive crop / flip / blend / link group (optional for old presets) */
+  fx?: LayerFx;
 }
+
+/** Crop values are % of the source image trimmed from each edge. */
+export interface LayerFx {
+  cropT: number;
+  cropR: number;
+  cropB: number;
+  cropL: number;
+  flipX: boolean;
+  flipY: boolean;
+  blend: string;
+  group: string | null;
+}
+
+export const DEFAULT_FX: LayerFx = {
+  cropT: 0,
+  cropR: 0,
+  cropB: 0,
+  cropL: 0,
+  flipX: false,
+  flipY: false,
+  blend: "normal",
+  group: null,
+};
+
+export const fxOf = (l: { fx?: LayerFx }): LayerFx => ({ ...DEFAULT_FX, ...(l.fx ?? {}) });
+
+export const BLEND_MODES = [
+  { id: "normal", label: "Normal" },
+  { id: "screen", label: "Screen (drops black)" },
+  { id: "color-dodge", label: "Color Dodge (neon glow)" },
+  { id: "overlay", label: "Overlay" },
+  { id: "soft-light", label: "Soft Light" },
+  { id: "lighten", label: "Lighten" },
+  { id: "multiply", label: "Multiply" },
+] as const;
+
+export const LINK_GROUPS = ["A", "B", "C", "D"] as const;
+
+export interface CanvasRes {
+  w: number;
+  h: number;
+}
+
+export const RES_GROUPS: { label: string; items: { label: string; w: number; h: number }[] }[] = [
+  {
+    label: "16:9",
+    items: [
+      { label: "720p HD", w: 1280, h: 720 },
+      { label: "900p", w: 1600, h: 900 },
+      { label: "1080p FHD", w: 1920, h: 1080 },
+      { label: "1440p QHD (2K)", w: 2560, h: 1440 },
+      { label: "2160p UHD (4K)", w: 3840, h: 2160 },
+    ],
+  },
+  {
+    label: "21:9 Ultrawide",
+    items: [
+      { label: "UW 720p", w: 1720, h: 720 },
+      { label: "UW-FHD", w: 2560, h: 1080 },
+      { label: "UW-QHD (2K)", w: 3440, h: 1440 },
+      { label: "UW 4K-lite", w: 3840, h: 1600 },
+    ],
+  },
+  {
+    label: "16:10 / 4:3 / Stretched",
+    items: [
+      { label: "16:10 WUXGA", w: 1920, h: 1200 },
+      { label: "16:10 WQXGA", w: 2560, h: 1600 },
+      { label: "4:3 Stretched 1080", w: 1440, h: 1080 },
+      { label: "4:3 Stretched 960", w: 1280, h: 960 },
+    ],
+  },
+];
+
+export const ALL_RES = RES_GROUPS.flatMap((g) => g.items);
 
 export interface CompositePreset {
   id: string;
@@ -113,6 +190,7 @@ export interface SceneLayer {
   width: number;
   height: number;
   transform: Transform;
+  fx?: LayerFx;
 }
 
 export interface VaultData {

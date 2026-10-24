@@ -81,7 +81,28 @@ function Overlay() {
         }
         ctx.globalAlpha = t.opacity / 100;
         ctx.filter = f.length ? f.join(" ") : "none";
-        ctx.drawImage(img, W / 2 + t.x - w / 2, H / 2 + t.y - h / 2, w, h);
+        const fx = { cropT: 0, cropR: 0, cropB: 0, cropL: 0, flipX: false, flipY: false, blend: "normal", ...(l.fx ?? {}) };
+        const iw = img.naturalWidth || l.width;
+        const ih = img.naturalHeight || l.height;
+        const vw = Math.max(0.01, 1 - (fx.cropL + fx.cropR) / 100);
+        const vh = Math.max(0.01, 1 - (fx.cropT + fx.cropB) / 100);
+        ctx.globalCompositeOperation = (fx.blend && fx.blend !== "normal" ? fx.blend : "source-over") as GlobalCompositeOperation;
+        ctx.save();
+        ctx.translate(W / 2 + t.x, H / 2 + t.y);
+        ctx.scale(fx.flipX ? -1 : 1, fx.flipY ? -1 : 1);
+        ctx.drawImage(
+          img,
+          (iw * fx.cropL) / 100,
+          (ih * fx.cropT) / 100,
+          iw * vw,
+          ih * vh,
+          -w / 2 + (w * fx.cropL) / 100,
+          -h / 2 + (h * fx.cropT) / 100,
+          w * vw,
+          h * vh,
+        );
+        ctx.restore();
+        ctx.globalCompositeOperation = "source-over";
       });
     });
   }, [p]);

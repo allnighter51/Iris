@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { assetUrl } from "../api";
-import { ROLES, type Layer, type Role, type VaultData } from "../types";
+import { BLEND_MODES, LINK_GROUPS, ROLES, fxOf, type Layer, type LayerFx, type Role, type VaultData } from "../types";
 import { roleBadge } from "../layers";
 import { clamp } from "../util";
 import { CopyIcon, EyeIcon, LockIcon, TrashIcon } from "./icons";
@@ -13,13 +13,14 @@ interface Props {
   selectedId: string | null;
   select: (id: string | null) => void;
   update: (id: string, p: Partial<Layer>) => void;
+  updateFx: (id: string, p: Partial<LayerFx>) => void;
   duplicate: (id: string) => void;
   remove: (id: string) => void;
   roleHotkeys: Record<string, string>;
 }
 
 /** Right panel: stack manager (top) + selected-layer inspector (bottom). */
-export function LayerPanel({ vault, layers, setLayers, selectedId, select, update, duplicate, remove, roleHotkeys }: Props) {
+export function LayerPanel({ vault, layers, setLayers, selectedId, select, update, updateFx, duplicate, remove, roleHotkeys }: Props) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<{ id: string; after: boolean } | null>(null);
   const [step, setStep] = useState(1);
@@ -99,6 +100,8 @@ export function LayerPanel({ vault, layers, setLayers, selectedId, select, updat
                   <div className="lname-sub">
                     <span className={`rbadge r-${l.role}`}>{roleBadge(l.role)}</span>
                     <span className="mono muted">z{z}</span>
+                    {fxOf(l).group && <span className="rbadge link-badge" title="Linked group — moves together">🔗{fxOf(l).group}</span>}
+                    {(fxOf(l).cropT || fxOf(l).cropR || fxOf(l).cropB || fxOf(l).cropL) ? <span className="mono muted" title="Cropped">✂</span> : null}
                     {!it && <span className="mono warn">MISSING</span>}
                   </div>
                 </div>
@@ -205,9 +208,71 @@ export function LayerPanel({ vault, layers, setLayers, selectedId, select, updat
                 </div>
               }
             />
+            <FxControls layer={sel} updateFx={updateFx} />
           </fieldset>
         )}
       </section>
     </aside>
+  );
+}
+
+
+/** Photoshop-style non-destructive tools: blend mode, crop, flip, link group. */
+function FxControls({ layer, updateFx }: { layer: Layer; updateFx: (id: string, p: Partial<LayerFx>) => void }) {
+  const fx = fxOf(layer);
+  const crops = [
+    ["cropT", "Top"],
+    ["cropB", "Bottom"],
+    ["cropL", "Left"],
+    ["cropR", "Right"],
+  ] as const;
+  const anyCrop = fx.cropT || fx.cropR || fx.cropB || fx.cropL;
+  return (
+    <>
+      <h5 className="section">Blend, Crop &amp; Link</h5>
+      <div className="field">
+        <label>Blend Mode</label>
+        <select className="input full" value={fx.blend || "normal"} onChange={(e) => updateFx(layer.id, { blend: e.target.value })}>
+          {BLEND_MODES.map((b) => <option key={b.id} value={b.id}>{b.label}</option>)}
+        </select>
+        <div className="muted small hk">Blends with the layers beneath it in this stack.</div>
+      </div>
+      <div className="field">
+        <div className="field-head">
+          <label>Crop (% trimmed)</label>
+          <button className="btn small outline" disabled={!anyCrop} onClick={() => updateFx(layer.id, { cropT: 0, cropR: 0, cropB: 0, cropL: 0 })}>Reset Crop</button>
+        </div>
+        <div className="crop-grid">
+          {crops.map(([k, label]) => (
+            <div key={k} className="xy">
+              <span className="mono muted">{label[0]}</span>
+              <NumField
+                value={fx[k]}
+                min={0}
+                max={95}
+                width={64}
+                onChange={(v) => updateFx(layer.id, { [k]: clamp(v, 0, 95) } as Partial<LayerFx>)}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="field">
+        <div className="field-head">
+          <label>Mirror</label>
+        </div>
+        <div className="btn-row">
+          <button className={`btn small ${fx.flipX ? "primary" : "outline"}`} onClick={() => updateFx(layer.id, { flipX: !fx.flipX })}>? Flip Horizontal</button>
+          <button className={`btn small ${fx.flipY ? "primary" : "outline"}`} onClick={() => updateFx(layer.id, { flipY: !fx.flipY })}>? Flip Vertical</button>
+        </div>
+      </div>
+      <div className="field">
+        <label>Link Group</label>
+        <select className="input full" value={fx.group ?? ""} onChange={(e) => updateFx(layer.id, { group: e.target.value || null })}>
+          <option value="">Not linked</option>
+          {LINK_GROUPS.map((g) => <option key={g} value={g}>?? Group {g} � moves together</option>)}
+        </select>
+      </div>
+    </>
   );
 }

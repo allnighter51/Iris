@@ -5,6 +5,8 @@ import {
   DEFAULT_OVERLAY,
   DEFAULT_TRANSFORM,
   KNOWN_GAMES,
+  fxOf,
+  type CanvasRes,
   type CompositePreset,
   type Layer,
   type MonitorInfo,
@@ -50,6 +52,24 @@ export default function App() {
   const [layers, setLayers] = useState<Layer[]>([]);
   const [live, setLive] = useState(false); // composite is what the overlay shows
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
+  // authoring resolution for the Layering canvas (null = match the monitor)
+  const [canvasRes, setCanvasResState] = useState<CanvasRes | null>(() => {
+    try {
+      const raw = localStorage.getItem("iris_canvas_res");
+      return raw ? (JSON.parse(raw) as CanvasRes) : null;
+    } catch {
+      return null;
+    }
+  });
+  const setCanvasRes = useCallback((r: CanvasRes | null) => {
+    setCanvasResState(r);
+    try {
+      if (r) localStorage.setItem("iris_canvas_res", JSON.stringify(r));
+      else localStorage.removeItem("iris_canvas_res");
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     Promise.all([api.vaultLoad(), api.settingsGet(), api.listMonitors()]).then(([v, s, m]) => {
@@ -80,11 +100,14 @@ export default function App() {
   // Push to the native window: either the single overlay or the resolved composite.
   useEffect(() => {
     if (!ready || !vault) return;
+    // a canvas authored at another resolution is scaled to fit the real monitor
+    const m = monitors[overlay.monitor] ?? monitors[0];
+    const factor = canvasRes && m ? Math.min(m.width / canvasRes.w, m.height / canvasRes.h) : 1;
     const state: OverlayState = live
-      ? { ...overlay, path: null, scene: toScene(layers, vault) }
+      ? { ...overlay, path: null, scene: toScene(layers, vault, factor) }
       : { ...overlay, scene: [] };
     api.overlayApply(state).catch(console.error);
-  }, [overlay, layers, live, vault, ready]);
+  }, [overlay, layers, live, vault, ready, canvasRes, monitors]);
 
   // if the active item is deleted, clear the overlay
   useEffect(() => {
@@ -135,6 +158,7 @@ export default function App() {
   const loadPreset = useCallback((p: CompositePreset, pushLive: boolean, goToLayering = false) => {
     setLayers(fromPreset(p.layers));
     setActivePresetId(p.id);
+    if (p.refW && p.refH) setCanvasRes({ w: p.refW, h: p.refH });
     if (pushLive) {
       setLive(true);
       setOverlay((o) => ({ ...o, enabled: true }));
@@ -295,6 +319,7 @@ export default function App() {
                 scale: Number(l.scale) || 100,
                 opacity: typeof l.opacity === "number" ? l.opacity : 100,
                 hue: Number(l.hue) || 0,
+                fx: fxOf({ fx: l.fx }),
               };
             });
             setLayers(() => reconstructed);
@@ -398,6 +423,8 @@ export default function App() {
             activePresetId={activePresetId}
             setActivePresetId={setActivePresetId}
             loadPreset={(p, push) => loadPreset(p, push)}
+            canvasRes={canvasRes}
+            setCanvasRes={setCanvasRes}
           />
         )}
         {tab === "settings" && (

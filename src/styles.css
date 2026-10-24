@@ -693,3 +693,18 @@ fieldset.plain:disabled { opacity: 0.55; }
 }
 
 
+
+/* Layering studio: mini-Photoshop tools */
+.canvas-toolbar { flex-wrap: wrap; }
+.tools-bar { row-gap: 6px; }
+.tool-group { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border-left: 1px solid var(--border); }
+.tool-group:first-of-type { border-left: 0; }
+.tool-group .btn.small, .tools-bar .btn.small { padding: 5px 9px; font-size: 11px; }
+.chop-pct { width: 54px; padding: 4px 6px !important; text-align: center; }
+.res-ctl { display: inline-flex; align-items: center; gap: 4px; }
+.res-sel { max-width: 210px; }
+.res-tag { font-size: 10px; padding: 2px 6px; color: var(--cyan); border: 1px solid var(--border); border-radius: 4px; }
+.lbox.cropping { border-style: dashed; border-color: var(--pink); box-shadow: 0 0 10px rgba(236, 72, 153, 0.4); }
+.hnd.crop-hnd { border-color: var(--pink); box-shadow: 0 0 6px rgba(236, 72, 153, 0.6); }
+.crop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.link-badge { background: rgba(6, 182, 212, 0.14); color: var(--cyan); }

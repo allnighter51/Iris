@@ -1,7 +1,19 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api";
-import type { CompositePreset, Layer, MonitorInfo, Settings, VaultData, VaultItem } from "../types";
-import { snap1, uid, withZ } from "../layers";
+import {
+  ALL_RES,
+  RES_GROUPS,
+  fxOf,
+  type CanvasRes,
+  type CompositePreset,
+  type Layer,
+  type LayerFx,
+  type MonitorInfo,
+  type Settings,
+  type VaultData,
+  type VaultItem,
+} from "../types";
+import { layerBox, snapBox, uid, withZ, type Box } from "../layers";
 import { clamp, monitorLabel } from "../util";
 import { LayerDrawer } from "./LayerDrawer";
 import { LayerPanel } from "./LayerPanel";
@@ -24,34 +36,75 @@ interface Props {
   activePresetId: string | null;
   setActivePresetId: (id: string | null) => void;
   loadPreset: (p: CompositePreset, push: boolean) => void;
+  /** authoring canvas resolution; null = match the monitor */
+  canvasRes: CanvasRes | null;
+  setCanvasRes: (r: CanvasRes | null) => void;
 }
 
 type Drag =
-  | { mode: "move"; id: string; px: number; py: number; x: number; y: number; w: number; h: number }
-  | { mode: "resize"; id: string; sx: number; sy: number; ox: number; oy: number; iw: number; ih: number }
+  | {
+      mode: "move";
+      id: string;
+      px: number;
+      py: number;
+      starts: { id: string; x: number; y: number }[];
+      box: Box;
+      others: Box[];
+    }
+  | { mode: "resize"; id: string; hx: number; ax: number; ay: number; cx: number; cy: number; scale: number; visW: number }
+  | { mode: "crop"; id: string; edges: string }
   | null;
 
 const SNAP_PX = 8;
 
+/** Crop in *visual* space (what the user sees after flipping) <-> stored source-space crop. */
+const visCrop = (fx: LayerFx) => ({
+  L: fx.flipX ? fx.cropR : fx.cropL,
+  R: fx.flipX ? fx.cropL : fx.cropR,
+  T: fx.flipY ? fx.cropB : fx.cropT,
+  B: fx.flipY ? fx.cropT : fx.cropB,
+});
+const fromVis = (fx: LayerFx, v: { L: number; R: number; T: number; B: number }): Partial<LayerFx> => ({
+  cropL: fx.flipX ? v.R : v.L,
+  cropR: fx.flipX ? v.L : v.R,
+  cropT: fx.flipY ? v.B : v.T,
+  cropB: fx.flipY ? v.T : v.B,
+});
+
+const resKey = (r: CanvasRes | null) => (r ? `${r.w}x${r.h}` : "auto");
+const aspectTag = (w: number, h: number) => {
+  const a = w / h;
+  if (Math.abs(a - 16 / 9) < 0.03) return "16:9";
+  if (Math.abs(a - 21 / 9) < 0.12) return "21:9";
+  if (Math.abs(a - 16 / 10) < 0.03) return "16:10";
+  if (Math.abs(a - 4 / 3) < 0.03) return "4:3";
+  return `${a.toFixed(2)}:1`;
+};
+
 export function Layering(p: Props) {
-  const { vault, layers, setLayers, monitors } = p;
+  const { vault, layers, setLayers, monitors, canvasRes } = p;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [zoom, setZoom] = useState<"fit" | 50 | 100>("fit");
   const [ref, setRef] = useState<RefKey>("grid");
   const [shot, setShot] = useState<string | null>(null);
   const [customShot, setCustomShot] = useState<string | null>(() => localStorage.getItem("iris_custom_ref_shot"));
   const [note, setNote] = useState("");
-  const [guides, setGuides] = useState<{ gx: number | null; gy: number | null }>({ gx: null, gy: null });
+  const [guides, setGuides] = useState<{ xs: number[]; ys: number[] }>({ xs: [], ys: [] });
   const [saveOpen, setSaveOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [tool, setTool] = useState<"move" | "crop">("move");
+  const [snapOn, setSnapOn] = useState(true);
+  const [grid10, setGrid10] = useState(false);
+  const [soloId, setSoloId] = useState<string | null>(null);
+  const [chopPct, setChopPct] = useState(50);
   const stage = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag>(null);
   const customInput = useRef<HTMLInputElement>(null);
 
   const mon = monitors[p.monitor] ?? monitors[0];
-  const W = mon?.width ?? 1920;
-  const H = mon?.height ?? 1080;
+  const W = canvasRes?.w ?? mon?.width ?? 1920;
+  const H = canvasRes?.h ?? mon?.height ?? 1080;
   const items = useMemo(() => new Map(vault.items.map((i) => [i.id, i])), [vault.items]);
   const sel = layers.find((l) => l.id === selectedId) ?? null;
   const activePreset = vault.presets.find((x) => x.id === p.activePresetId) ?? null;
@@ -60,10 +113,37 @@ export function Layering(p: Props) {
     (id: string, patch: Partial<Layer>) => setLayers((ls) => ls.map((l) => (l.id === id ? { ...l, ...patch } : l))),
     [setLayers],
   );
+  const updateFx = useCallback(
+    (id: string, patch: Partial<LayerFx>) =>
+      setLayers((ls) => ls.map((l) => (l.id === id ? { ...l, fx: { ...fxOf(l), ...patch } } : l))),
+    [setLayers],
+  );
+
+  /** Move a layer plus every unlocked layer linked to it by the same group. */
+  const shiftLayers = useCallback(
+    (id: string, dx: number, dy: number) =>
+      setLayers((ls) => {
+        const src = ls.find((l) => l.id === id);
+        const g = src ? fxOf(src).group : null;
+        return ls.map((l) =>
+          (l.id === id || (g && fxOf(l).group === g)) && !l.locked ? { ...l, x: Math.round(l.x + dx), y: Math.round(l.y + dy) } : l,
+        );
+      }),
+    [setLayers],
+  );
+
   const duplicate = (id: string) => {
     const src = layers.find((l) => l.id === id);
     if (!src) return;
-    const copy: Layer = { ...src, id: uid(), name: src.name + " copy", x: src.x + 20, y: src.y + 20, locked: false };
+    const copy: Layer = {
+      ...src,
+      id: uid(),
+      name: src.name + " copy",
+      x: src.x + 20,
+      y: src.y + 20,
+      locked: false,
+      fx: { ...fxOf(src), group: null },
+    };
     setLayers((ls) => {
       const i = ls.findIndex((l) => l.id === id);
       return i < 0 ? ls : [...ls.slice(0, i), copy, ...ls.slice(i)];
@@ -73,11 +153,12 @@ export function Layering(p: Props) {
   const remove = (id: string) => {
     setLayers((ls) => ls.filter((l) => l.id !== id));
     if (selectedId === id) setSelectedId(null);
+    if (soloId === id) setSoloId(null);
   };
 
-  const size = (l: Layer) => {
+  const boxOf = (l: Layer): Box | null => {
     const it = items.get(l.vaultItemId);
-    return it ? { w: (it.width * l.scale) / 100, h: (it.height * l.scale) / 100, iw: it.width, ih: it.height } : null;
+    return it ? layerBox(l, it.width, it.height) : null;
   };
   const toMonitor = (cx: number, cy: number) => {
     const r = stage.current!.getBoundingClientRect();
@@ -85,38 +166,106 @@ export function Layering(p: Props) {
     return { mx: (cx - r.left) / k, my: (cy - r.top) / k, k };
   };
 
+  /** Photoshop-style chop: split the selected layer into two non-destructive crops. */
+  function chop(axis: "v" | "h") {
+    if (!sel || sel.locked) return;
+    const fx = fxOf(sel);
+    const v = visCrop(fx);
+    const f = clamp(chopPct, 5, 95) / 100;
+    const a = { ...v };
+    const b = { ...v };
+    let nameA: string;
+    let nameB: string;
+    if (axis === "v") {
+      const m = v.L + (100 - v.L - v.R) * f;
+      a.R = Math.round((100 - m) * 10) / 10;
+      b.L = Math.round(m * 10) / 10;
+      nameA = " (left)";
+      nameB = " (right)";
+    } else {
+      const m = v.T + (100 - v.T - v.B) * f;
+      a.B = Math.round((100 - m) * 10) / 10;
+      b.T = Math.round(m * 10) / 10;
+      nameA = " (top)";
+      nameB = " (bottom)";
+    }
+    const base = sel.name.replace(/ \((left|right|top|bottom)\)$/, "");
+    const copy: Layer = { ...sel, id: uid(), name: base + nameB, fx: { ...fx, ...fromVis(fx, b) } };
+    setLayers((ls) => {
+      const i = ls.findIndex((l) => l.id === sel.id);
+      if (i < 0) return ls;
+      const first: Layer = { ...ls[i], name: base + nameA, fx: { ...fx, ...fromVis(fx, a) } };
+      return [...ls.slice(0, i), copy, first, ...ls.slice(i + 1)];
+    });
+    setSelectedId(copy.id);
+  }
+
+  function align(kind: "l" | "cx" | "r" | "t" | "cy" | "b") {
+    if (!sel || sel.locked) return;
+    const b = boxOf(sel);
+    if (!b) return;
+    let dx = 0;
+    let dy = 0;
+    if (kind === "l") dx = -W / 2 - b.l;
+    if (kind === "cx") dx = -(b.l + b.w / 2);
+    if (kind === "r") dx = W / 2 - (b.l + b.w);
+    if (kind === "t") dy = -H / 2 - b.t;
+    if (kind === "cy") dy = -(b.t + b.h / 2);
+    if (kind === "b") dy = H / 2 - (b.t + b.h);
+    shiftLayers(sel.id, dx, dy);
+  }
+
   function onPointerDown(e: React.PointerEvent) {
     if (e.button !== 0) return;
     const { mx, my } = toMonitor(e.clientX, e.clientY);
-    const handle = (e.target as HTMLElement).dataset.handle;
-    if (handle && sel && !sel.locked) {
-      const s = size(sel)!;
-      const [hx, hy] = handle.split(",").map(Number);
+    const target = e.target as HTMLElement;
+    const handle = target.dataset.handle;
+    const cropEdges = target.dataset.crop;
+    if (cropEdges && sel && !sel.locked) {
       stage.current!.setPointerCapture(e.pointerId);
+      drag.current = { mode: "crop", id: sel.id, edges: cropEdges };
+      return;
+    }
+    if (handle && sel && !sel.locked) {
+      const b = boxOf(sel)!;
+      const [hx] = handle.split(",").map(Number);
+      stage.current!.setPointerCapture(e.pointerId);
+      const [, hy] = handle.split(",").map(Number);
       drag.current = {
         mode: "resize",
         id: sel.id,
-        sx: hx,
-        sy: hy,
-        ox: W / 2 + sel.x - hx * (s.w / 2),
-        oy: H / 2 + sel.y - hy * (s.h / 2),
-        iw: s.iw,
-        ih: s.ih,
+        hx,
+        ax: hx < 0 ? b.l + b.w : b.l,
+        ay: hy < 0 ? b.t + b.h : b.t,
+        cx: sel.x,
+        cy: sel.y,
+        scale: sel.scale,
+        visW: b.w,
       };
       return;
     }
     const hit = layers.find((l) => {
-      const s = size(l);
-      if (!l.visible || !s) return false;
-      const cx = W / 2 + l.x;
-      const cy = H / 2 + l.y;
-      return Math.abs(mx - cx) <= s.w / 2 && Math.abs(my - cy) <= s.h / 2;
+      const b = boxOf(l);
+      if (!l.visible || !b) return false;
+      const cx = mx - W / 2;
+      const cy = my - H / 2;
+      return cx >= b.l && cx <= b.l + b.w && cy >= b.t && cy <= b.t + b.h;
     });
     setSelectedId(hit?.id ?? null);
     if (hit && !hit.locked) {
-      const s = size(hit)!;
+      const g = fxOf(hit).group;
+      const members = layers.filter((l) => l.id === hit.id || (g && fxOf(l).group === g)).filter((l) => !l.locked);
+      const moving = new Set(members.map((m) => m.id));
       stage.current!.setPointerCapture(e.pointerId);
-      drag.current = { mode: "move", id: hit.id, px: mx, py: my, x: hit.x, y: hit.y, w: s.w, h: s.h };
+      drag.current = {
+        mode: "move",
+        id: hit.id,
+        px: mx,
+        py: my,
+        starts: members.map((m) => ({ id: m.id, x: m.x, y: m.y })),
+        box: boxOf(hit)!,
+        others: layers.filter((l) => l.visible && !moving.has(l.id)).map(boxOf).filter((b): b is Box => !!b),
+      };
     }
   }
 
@@ -125,33 +274,88 @@ export function Layering(p: Props) {
     if (!d) return;
     const { mx, my, k } = toMonitor(e.clientX, e.clientY);
     if (d.mode === "move") {
-      let x = d.x + (mx - d.px);
-      let y = d.y + (my - d.py);
-      let gx: number | null = null;
-      let gy: number | null = null;
-      if (!e.altKey) {
-        const sx = snap1(x, d.w, W, SNAP_PX / k);
-        const sy = snap1(y, d.h, H, SNAP_PX / k);
-        x = sx.pos; y = sy.pos; gx = sx.guide; gy = sy.guide;
+      let dx = mx - d.px;
+      let dy = my - d.py;
+      let xs: number[] = [];
+      let ys: number[] = [];
+      const useGrid = grid10 || e.shiftKey;
+      if (!e.altKey && (snapOn || useGrid)) {
+        const moved: Box = { ...d.box, l: d.box.l + dx, t: d.box.t + dy };
+        const s = snapBox(moved, W, H, snapOn ? d.others : [], snapOn ? SNAP_PX / k : 0, useGrid ? 10 : 0);
+        dx += s.dx;
+        dy += s.dy;
+        xs = s.xs;
+        ys = s.ys;
       }
-      setGuides({ gx, gy });
-      update(d.id, { x: Math.round(x), y: Math.round(y) });
-    } else {
-      const newW = Math.max(8, (mx - d.ox) * d.sx);
-      const scale = clamp((newW / d.iw) * 100, 5, 400);
-      const nw = (d.iw * scale) / 100;
-      const nh = (d.ih * scale) / 100;
+      setGuides({ xs, ys });
+      const byId = new Map(d.starts.map((s) => [s.id, s]));
+      setLayers((ls) =>
+        ls.map((l) => {
+          const s = byId.get(l.id);
+          return s ? { ...l, x: Math.round(s.x + dx), y: Math.round(s.y + dy) } : l;
+        }),
+      );
+    } else if (d.mode === "resize") {
+      const newW = (mx - W / 2 - d.ax) * d.hx;
+      const scale = clamp(d.scale * (newW / d.visW), 5, 400);
+      const r = scale / d.scale;
       update(d.id, {
         scale: Math.round(scale * 10) / 10,
-        x: Math.round(d.ox + d.sx * (nw / 2) - W / 2),
-        y: Math.round(d.oy + d.sy * (nh / 2) - H / 2),
+        x: Math.round(d.ax + (d.cx - d.ax) * r),
+        y: Math.round(d.ay + (d.cy - d.ay) * r),
       });
+    } else {
+      const l = layers.find((x) => x.id === d.id);
+      const it = l && items.get(l.vaultItemId);
+      if (!l || !it) return;
+      const fx = fxOf(l);
+      const lw = (it.width * l.scale) / 100;
+      const lh = (it.height * l.scale) / 100;
+      const px = ((mx - (W / 2 + l.x - lw / 2)) / lw) * 100;
+      const py = ((my - (H / 2 + l.y - lh / 2)) / lh) * 100;
+      const v = visCrop(fx);
+      const rd = (n: number) => Math.round(n * 10) / 10;
+      if (d.edges.includes("l")) v.L = rd(clamp(px, 0, 98 - v.R));
+      if (d.edges.includes("r")) v.R = rd(clamp(100 - px, 0, 98 - v.L));
+      if (d.edges.includes("t")) v.T = rd(clamp(py, 0, 98 - v.B));
+      if (d.edges.includes("b")) v.B = rd(clamp(100 - py, 0, 98 - v.T));
+      updateFx(l.id, fromVis(fx, v));
     }
   }
   const endDrag = () => {
     drag.current = null;
-    setGuides({ gx: null, gy: null });
+    setGuides({ xs: [], ys: [] });
   };
+
+  // Keyboard: arrows nudge (Shift = 10px), Ctrl+D duplicate, Delete removes, C toggles crop tool.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      if (!sel || saveOpen || exportOpen || importOpen) return;
+      const n = e.shiftKey ? 10 : 1;
+      const arrows: Record<string, [number, number]> = {
+        ArrowLeft: [-n, 0],
+        ArrowRight: [n, 0],
+        ArrowUp: [0, -n],
+        ArrowDown: [0, n],
+      };
+      if (arrows[e.key]) {
+        e.preventDefault();
+        shiftLayers(sel.id, arrows[e.key][0], arrows[e.key][1]);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        duplicate(sel.id);
+      } else if (e.key === "Delete" && !sel.locked) {
+        remove(sel.id);
+      } else if (e.key.toLowerCase() === "c" && !e.ctrlKey && !e.metaKey) {
+        setTool((t0) => (t0 === "crop" ? "move" : "crop"));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sel, layers, saveOpen, exportOpen, importOpen]);
 
   async function captureDesktop() {
     setNote("");
@@ -191,6 +395,13 @@ export function Layering(p: Props) {
     reader.readAsDataURL(f);
   }
 
+  const cycleRes = (dir: 1 | -1) => {
+    const list: (CanvasRes | null)[] = [null, ...ALL_RES.map((r) => ({ w: r.w, h: r.h }))];
+    const cur = list.findIndex((r) => resKey(r) === resKey(canvasRes));
+    const next = list[(((cur < 0 ? 0 : cur) + dir) % list.length + list.length) % list.length];
+    p.setCanvasRes(next);
+  };
+
   const stageWidth = zoom === "fit" ? "100%" : `${(W * zoom) / 100}px`;
 
   const bgImage =
@@ -199,6 +410,12 @@ export function Layering(p: Props) {
       : ref === "custom" && customShot
         ? `url(${customShot})`
         : undefined;
+
+  const previewLayers = soloId ? layers.map((l) => (l.id === soloId ? { ...l, visible: true } : { ...l, visible: false })) : layers;
+  const selBox = sel && sel.visible ? boxOf(sel) : null;
+  const selFx = sel ? fxOf(sel) : null;
+  const cropped = !!selFx && (selFx.cropT || selFx.cropR || selFx.cropB || selFx.cropL);
+  const pct = (n: number, total: number) => `${(n / total) * 100}%`;
 
   return (
     <div className="layering">
@@ -214,7 +431,7 @@ export function Layering(p: Props) {
         onSave={() => setSaveOpen(true)}
         onExport={() => setExportOpen(true)}
         onImport={() => setImportOpen(true)}
-        clear={() => { setLayers(() => []); p.setActivePresetId(null); setSelectedId(null); }}
+        clear={() => { setLayers(() => []); p.setActivePresetId(null); setSelectedId(null); setSoloId(null); }}
       />
       <div className="studio">
         <LayerDrawer vault={vault} onAdd={(it) => setSelectedId(p.addLayer(it))} />
@@ -253,29 +470,46 @@ export function Layering(p: Props) {
                   <button type="button" className="btn small primary prompt-btn">Upload Screenshot</button>
                 </div>
               )}
-              <SceneImages layers={layers} vault={vault} refW={W} refH={H} />
+              <SceneImages layers={previewLayers} vault={vault} refW={W} refH={H} />
 
-              {guides.gx !== null && <div className="guide v" style={{ left: `${(guides.gx / W) * 100}%` }} />}
-              {guides.gy !== null && <div className="guide h" style={{ top: `${(guides.gy / H) * 100}%` }} />}
+              {guides.xs.map((x) => <div key={`x${x}`} className="guide v" style={{ left: pct(x, W) }} />)}
+              {guides.ys.map((y) => <div key={`y${y}`} className="guide h" style={{ top: pct(y, H) }} />)}
 
-              {sel && size(sel) && sel.visible && (
+              {sel && selBox && (
                 <div
-                  className={`lbox${sel.locked ? " locked" : ""}`}
+                  className={`lbox${sel.locked ? " locked" : ""}${tool === "crop" ? " cropping" : ""}`}
                   style={{
-                    left: `${((W / 2 + sel.x - size(sel)!.w / 2) / W) * 100}%`,
-                    top: `${((H / 2 + sel.y - size(sel)!.h / 2) / H) * 100}%`,
-                    width: `${(size(sel)!.w / W) * 100}%`,
-                    height: `${(size(sel)!.h / H) * 100}%`,
+                    left: pct(W / 2 + selBox.l, W),
+                    top: pct(H / 2 + selBox.t, H),
+                    width: pct(selBox.w, W),
+                    height: pct(selBox.h, H),
                   }}
                 >
-                  {!sel.locked &&
+                  {!sel.locked && tool === "move" &&
                     ([[-1, -1], [1, -1], [-1, 1], [1, 1]] as const).map(([hx, hy]) => (
                       <i key={`${hx}${hy}`} className="hnd" data-handle={`${hx},${hy}`} style={{ left: hx < 0 ? 0 : "100%", top: hy < 0 ? 0 : "100%", cursor: hx === hy ? "nwse-resize" : "nesw-resize" }} />
                     ))}
-                  <span className="lbox-tag mono">{sel.name} · {Math.round(sel.x)},{Math.round(sel.y)} · {sel.scale.toFixed(0)}%</span>
+                  {!sel.locked && tool === "crop" &&
+                    ([
+                      ["tl", "0%", "0%", "nwse-resize"],
+                      ["t", "50%", "0%", "ns-resize"],
+                      ["tr", "100%", "0%", "nesw-resize"],
+                      ["r", "100%", "50%", "ew-resize"],
+                      ["br", "100%", "100%", "nwse-resize"],
+                      ["b", "50%", "100%", "ns-resize"],
+                      ["bl", "0%", "100%", "nesw-resize"],
+                      ["l", "0%", "50%", "ew-resize"],
+                    ] as const).map(([edges, left, top, cursor]) => (
+                      <i key={edges} className="hnd crop-hnd" data-crop={edges} style={{ left, top, cursor }} />
+                    ))}
+                  <span className="lbox-tag mono">
+                    {sel.name} · {Math.round(sel.x)},{Math.round(sel.y)} · {sel.scale.toFixed(0)}%{cropped ? " · ✂ cropped" : ""}
+                  </span>
                 </div>
               )}
-              <div className="stage-tag mono">{mon ? monitorLabel(mon) : "Display"}</div>
+              <div className="stage-tag mono">
+                {canvasRes ? `Canvas ${W}×${H} (${aspectTag(W, H)})` : mon ? monitorLabel(mon) : "Display"}
+              </div>
             </div>
           </div>
 
@@ -308,9 +542,33 @@ export function Layering(p: Props) {
                 &#x1F4F7; {customShot ? "Change Screenshot" : "Upload Screenshot"}
               </button>
             )}
-            <select className="input mon" value={p.monitor} onChange={(e) => p.setMonitor(Number(e.target.value))}>
+            <select className="input mon" value={p.monitor} onChange={(e) => p.setMonitor(Number(e.target.value))} title="Target monitor">
               {monitors.map((m) => <option key={m.index} value={m.index}>{monitorLabel(m)}</option>)}
             </select>
+            <div className="res-ctl" title="Authoring canvas resolution — pushed overlays auto-scale to your real monitor">
+              <button type="button" className="btn small outline num-btn" onClick={() => cycleRes(-1)} aria-label="Previous resolution">◀</button>
+              <select
+                className="input res-sel"
+                value={resKey(canvasRes)}
+                onChange={(e) => {
+                  if (e.target.value === "auto") return p.setCanvasRes(null);
+                  const [w, h] = e.target.value.split("x").map(Number);
+                  p.setCanvasRes({ w, h });
+                }}
+              >
+                <option value="auto">Match Monitor{mon ? ` (${mon.width}×${mon.height})` : ""}</option>
+                {canvasRes && !ALL_RES.some((r) => r.w === canvasRes.w && r.h === canvasRes.h) && (
+                  <option value={resKey(canvasRes)}>Custom {canvasRes.w}×{canvasRes.h}</option>
+                )}
+                {RES_GROUPS.map((g) => (
+                  <optgroup key={g.label} label={g.label}>
+                    {g.items.map((r) => <option key={`${r.w}x${r.h}`} value={`${r.w}x${r.h}`}>{r.label} — {r.w}×{r.h}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+              <button type="button" className="btn small outline num-btn" onClick={() => cycleRes(1)} aria-label="Next resolution">▶</button>
+              <span className="tag mono res-tag">{aspectTag(W, H)}</span>
+            </div>
             <div className="spacer" />
             {p.live && <span className="mono ok small live-flag">&#x25CF; LIVE SYNC</span>}
             {p.live && <button className="btn outline small" onClick={() => p.setLive(false)}>Stop</button>}
@@ -318,8 +576,50 @@ export function Layering(p: Props) {
               {p.live ? "Re-push Composite" : "Push Composite to Live Overlay"}
             </button>
           </div>
+
+          <div className="canvas-toolbar tools-bar card">
+            <div className="seg" title="Tool (press C to toggle crop)">
+              <button className={tool === "move" ? "active" : ""} onClick={() => setTool("move")}>✥ Move</button>
+              <button className={tool === "crop" ? "active" : ""} onClick={() => setTool("crop")}>✂ Crop</button>
+            </div>
+            <div className="tool-group" title="Align the selected layer to the canvas">
+              {([["l", "⇤", "Align left"], ["cx", "↔", "Center horizontally"], ["r", "⇥", "Align right"], ["t", "⤒", "Align top"], ["cy", "↕", "Center vertically"], ["b", "⤓", "Align bottom"]] as const).map(([k, g, t]) => (
+                <button key={k} className="btn small outline num-btn" disabled={!sel || sel.locked} title={t} onClick={() => align(k)}>{g}</button>
+              ))}
+            </div>
+            <div className="tool-group">
+              <button className={`btn small ${selFx?.flipX ? "primary" : "outline"}`} disabled={!sel || sel.locked} title="Flip horizontally" onClick={() => sel && updateFx(sel.id, { flipX: !selFx!.flipX })}>⇋ Flip X</button>
+              <button className={`btn small ${selFx?.flipY ? "primary" : "outline"}`} disabled={!sel || sel.locked} title="Flip vertically" onClick={() => sel && updateFx(sel.id, { flipY: !selFx!.flipY })}>⇅ Flip Y</button>
+            </div>
+            <div className="tool-group" title="Chop the selected layer into two independent pieces (non-destructive)">
+              <span className="mono small muted">Chop @</span>
+              <input
+                className="input chop-pct"
+                type="number"
+                min={5}
+                max={95}
+                value={chopPct}
+                onChange={(e) => setChopPct(Number(e.target.value) || 50)}
+              />
+              <span className="mono small muted">%</span>
+              <button className="btn small outline" disabled={!sel || sel.locked} onClick={() => chop("v")}>┃ Vertical</button>
+              <button className="btn small outline" disabled={!sel || sel.locked} onClick={() => chop("h")}>━ Horizontal</button>
+            </div>
+            <div className="spacer" />
+            <button className={`btn small ${soloId ? "primary" : "outline"}`} disabled={!sel && !soloId} title="Show only the selected layer in the editor" onClick={() => setSoloId(soloId ? null : selectedId)}>
+              {soloId ? "◉ Solo On" : "○ Solo"}
+            </button>
+            <button className={`btn small ${snapOn ? "primary" : "outline"}`} title="Smart guides: snap to canvas and other layers (hold Alt to bypass)" onClick={() => setSnapOn(!snapOn)}>
+              {snapOn ? "✓ Smart Snap" : "Snap Off"}
+            </button>
+            <button className={`btn small ${grid10 ? "primary" : "outline"}`} title="Move in 10px steps (or hold Shift)" onClick={() => setGrid10(!grid10)}>
+              {grid10 ? "✓ 10px Grid" : "10px Grid"}
+            </button>
+          </div>
           {note && <div className="error">{note}</div>}
-          <div className="muted small tips">Drag to move · corner handles scale · hold Alt to disable snapping · drop Vault items onto the canvas.</div>
+          <div className="muted small tips">
+            Drag to move · corner handles scale · <b>C</b> crop tool · arrows nudge 1px (<b>Shift</b> 10px) · <b>Ctrl+D</b> duplicate · <b>Del</b> delete · hold <b>Alt</b> to bypass snapping · drop Vault items onto the canvas.
+          </div>
         </section>
 
         <LayerPanel
@@ -329,6 +629,7 @@ export function Layering(p: Props) {
           selectedId={selectedId}
           select={setSelectedId}
           update={update}
+          updateFx={updateFx}
           duplicate={duplicate}
           remove={remove}
           roleHotkeys={p.settings.layerHotkeys}
@@ -365,10 +666,11 @@ export function Layering(p: Props) {
       {importOpen && (
         <ImportPresetModal
           vault={vault}
-          onImport={(importedLayers, _meta) => {
+          onImport={(importedLayers, meta) => {
             setLayers(() => importedLayers);
             p.setActivePresetId(null);
             setSelectedId(importedLayers[0]?.id ?? null);
+            if (meta.refW && meta.refH) p.setCanvasRes({ w: meta.refW, h: meta.refH });
           }}
           onClose={() => setImportOpen(false)}
         />
@@ -506,6 +808,7 @@ function ExportPresetModal({
         scale: l.scale,
         opacity: l.opacity,
         hue: l.hue,
+        fx: fxOf(l),
         vaultItemId: l.vaultItemId,
         assetFile: items.get(l.vaultItemId)?.file,
         assetName: items.get(l.vaultItemId)?.name,
@@ -634,6 +937,7 @@ function ImportPresetModal({
         scale: Number(l.scale) || 100,
         opacity: typeof l.opacity === "number" ? l.opacity : 100,
         hue: Number(l.hue) || 0,
+        fx: fxOf({ fx: l.fx }),
       };
     });
 

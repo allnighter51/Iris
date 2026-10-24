@@ -97,6 +97,26 @@ pub struct PresetLayer {
     pub scale: f64,
     pub opacity: f64,
     pub hue: f64,
+    /// non-destructive crop / flip / blend / link-group
+    #[serde(default)]
+    pub fx: LayerFx,
+}
+
+/// Non-destructive "Photoshop-style" layer effects.
+/// Crop values are percentages of the source image trimmed from each edge.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LayerFx {
+    pub crop_t: f64,
+    pub crop_r: f64,
+    pub crop_b: f64,
+    pub crop_l: f64,
+    pub flip_x: bool,
+    pub flip_y: bool,
+    /// "" / "normal" | "screen" | "color-dodge" | "overlay" | "soft-light" | "lighten" | "multiply"
+    pub blend: String,
+    /// layers sharing a group id move together
+    pub group: Option<String>,
 }
 
 /// A saved multi-layer "Loadout".
@@ -123,6 +143,8 @@ pub struct SceneLayer {
     pub width: u32,
     pub height: u32,
     pub transform: Transform,
+    #[serde(default)]
+    pub fx: LayerFx,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
