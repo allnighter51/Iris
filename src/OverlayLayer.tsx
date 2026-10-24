@@ -38,6 +38,7 @@ export function OverlayLayer({ src, imgW, imgH, t, monitorW, monitorH, k, lowRes
     height: h,
     opacity: t.opacity / 100,
     filter: filters.length ? filters.join(" ") : undefined,
+    animation: t.chromaCycle ? `irisRainbow ${t.chromaSpeed || 6}s linear infinite` : undefined,
     pointerEvents: "none",
     userSelect: "none",
   };

@@ -31,6 +31,8 @@ export interface Transform {
   hue: number;
   brightness: number;
   contrast: number;
+  chromaCycle?: boolean;
+  chromaSpeed?: number;
 }
 
 export const DEFAULT_TRANSFORM: Transform = {
@@ -41,6 +43,8 @@ export const DEFAULT_TRANSFORM: Transform = {
   hue: 0,
   brightness: 100,
   contrast: 100,
+  chromaCycle: false,
+  chromaSpeed: 6,
 };
 
 export interface VaultItem {

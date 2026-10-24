@@ -37,11 +37,25 @@ pub struct Transform {
     pub brightness: f64,
     /// percent
     pub contrast: f64,
+    /// continuous animated rainbow hue-shift
+    pub chroma_cycle: bool,
+    /// cycle duration in seconds (e.g. 6.0)
+    pub chroma_speed: f64,
 }
 
 impl Default for Transform {
     fn default() -> Self {
-        Self { x: 0.0, y: 0.0, scale: 100.0, opacity: 100.0, hue: 0.0, brightness: 100.0, contrast: 100.0 }
+        Self {
+            x: 0.0,
+            y: 0.0,
+            scale: 100.0,
+            opacity: 100.0,
+            hue: 0.0,
+            brightness: 100.0,
+            contrast: 100.0,
+            chroma_cycle: false,
+            chroma_speed: 6.0,
+        }
     }
 }
 

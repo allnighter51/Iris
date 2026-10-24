@@ -88,10 +88,21 @@ function Overlay() {
 
   const W = p?.monitorW ?? 1;
   const H = p?.monitorH ?? 1;
+  const isChroma = p?.state.transform.chromaCycle;
+  const chromaDuration = p?.state.transform.chromaSpeed || 6;
+
   return (
     <canvas
       ref={canvas}
-      style={{ position: "absolute", left: 0, top: 0, width: W / dpr, height: H / dpr, pointerEvents: "none" }}
+      style={{
+        position: "absolute",
+        left: 0,
+        top: 0,
+        width: W / dpr,
+        height: H / dpr,
+        pointerEvents: "none",
+        animation: isChroma ? `irisRainbow ${chromaDuration}s linear infinite` : undefined,
+      }}
     />
   );
 }

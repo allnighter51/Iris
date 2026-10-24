@@ -14,8 +14,6 @@ import { clamp, monitorLabel, resolutionTag } from "../util";
 import { OverlayLayer } from "../OverlayLayer";
 import { NumField, SliderRow, Toggle } from "./ui";
 
-type Backdrop = "grid" | "desktop" | "sample";
-
 interface Props {
   vault: VaultData;
   setVault: (v: VaultData) => void;
@@ -45,12 +43,14 @@ export function Display({
   settings,
   saveSettings,
 }: Props) {
-  const [backdrop, setBackdrop] = useState<Backdrop>("grid");
-  const [desktopShot, setDesktopShot] = useState<string | null>(null);
-  const [note, setNote] = useState("");
   const [adjusting, setAdjusting] = useState(false);
   const [step, setStep] = useState(1);
   const [saved, setSaved] = useState(false);
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [grid10, setGrid10] = useState(false);
+  const [guides, setGuides] = useState<{ gx: number | null; gy: number | null }>({ gx: null, gy: null });
+  const [snapBadge, setSnapBadge] = useState("");
+
   const box = useRef<HTMLDivElement>(null);
   const [boxW, setBoxW] = useState(800);
   const drag = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
@@ -75,6 +75,7 @@ export function Display({
     window.clearTimeout(guideTimer.current);
     guideTimer.current = window.setTimeout(() => setAdjusting(false), 1400);
   }, []);
+
   const patch = useCallback(
     (p: Partial<Transform>) => {
       setOverlay((o) => ({ ...o, transform: { ...o.transform, ...p } }));
@@ -83,26 +84,6 @@ export function Display({
     },
     [setOverlay, flash],
   );
-
-  async function captureDesktop() {
-    setNote("");
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      const v = document.createElement("video");
-      v.srcObject = stream;
-      await v.play();
-      const c = document.createElement("canvas");
-      c.width = v.videoWidth;
-      c.height = v.videoHeight;
-      c.getContext("2d")!.drawImage(v, 0, 0);
-      stream.getTracks().forEach((tr) => tr.stop());
-      setDesktopShot(c.toDataURL("image/jpeg", 0.85));
-      setBackdrop("desktop");
-    } catch {
-      setNote("Desktop capture was cancelled or is unavailable.");
-      setBackdrop("grid");
-    }
-  }
 
   if (!item) {
     return (
@@ -117,10 +98,38 @@ export function Display({
   }
 
   const src = assetUrl(vault.assetsDir, item.file);
-  const fit = () => {
+
+  // Sizing & Alignment presets
+  const fitScreen = () => {
     flash();
-    patch({ x: 0, y: 0, scale: Math.round(Math.max(mw / item.width, mh / item.height) * 1000) / 10 });
+    const scale = Math.round(Math.min(mw / item.width, mh / item.height) * 1000) / 10;
+    patch({ x: 0, y: 0, scale });
   };
+
+  const fillScreen = () => {
+    flash();
+    const scale = Math.round(Math.max(mw / item.width, mh / item.height) * 1000) / 10;
+    patch({ x: 0, y: 0, scale });
+  };
+
+  const native1to1 = () => {
+    flash();
+    patch({ x: 0, y: 0, scale: 100 });
+  };
+
+  const snapCenter = () => {
+    flash();
+    patch({ x: 0, y: 0 });
+  };
+
+  const roundTo10 = () => {
+    flash();
+    patch({
+      x: Math.round(t.x / 10) * 10,
+      y: Math.round(t.y / 10) * 10,
+    });
+  };
+
   const nudge = (dx: number, dy: number) => patch({ x: t.x + dx * step, y: t.y + dy * step });
   const bw = (item.width * t.scale) / 100;
   const bh = (item.height * t.scale) / 100;
@@ -142,29 +151,66 @@ export function Display({
               >
                 {item.favorite ? "\u2605" : "\u2606"}
               </button>
+              {t.chromaCycle && (
+                <span className="rainbow-badge mono" style={{ fontSize: 10, padding: "2px 8px", borderRadius: 4 }}>
+                  RAINBOW ACTIVE
+                </span>
+              )}
             </div>
             <div className="mono muted small">
               {item.width}x{item.height} · {resolutionTag(item.width, item.height)} · {item.game}
             </div>
           </div>
-          <div className="seg">
-            {(["grid", "sample"] as Backdrop[]).map((b) => (
-              <button key={b} className={backdrop === b ? "active" : ""} onClick={() => setBackdrop(b)}>
-                {b === "grid" ? "Dark Grid" : "Sample Game"}
-              </button>
-            ))}
-            <button className={backdrop === "desktop" ? "active" : ""} onClick={() => (desktopShot ? setBackdrop("desktop") : captureDesktop())}>
-              Desktop Capture
+
+          <div className="vp-quick-actions">
+            <button
+              type="button"
+              className={`btn small ${snapEnabled ? "primary" : "outline"}`}
+              onClick={() => setSnapEnabled(!snapEnabled)}
+              title="Snap to monitor center and edges when dragging near them (Hold Alt to bypass)"
+            >
+              {snapEnabled ? "✓ Center Snapping" : "Snapping Off"}
+            </button>
+            <button
+              type="button"
+              className={`btn small ${grid10 ? "primary" : "outline"}`}
+              onClick={() => setGrid10(!grid10)}
+              title="Drag and nudge in 10px increments (or hold Shift while dragging)"
+            >
+              {grid10 ? "✓ 10px Grid Active" : "10px Grid Snap"}
+            </button>
+            <button
+              type="button"
+              className="btn small outline"
+              onClick={fitScreen}
+              title="Fit overlay entirely inside your monitor"
+            >
+              Fit Screen
+            </button>
+            <button
+              type="button"
+              className="btn small outline"
+              onClick={native1to1}
+              title="Reset overlay scale to 1:1 original native size"
+            >
+              1:1 Native
+            </button>
+            <button
+              type="button"
+              className="btn small outline"
+              onClick={snapCenter}
+              title="Center overlay horizontally and vertically (X:0, Y:0)"
+            >
+              Center
             </button>
           </div>
         </div>
 
         <div
           ref={box}
-          className={`stage bracket bd-${backdrop}`}
+          className="stage bracket bd-grid"
           style={{
             aspectRatio: `${mw} / ${mh}`,
-            backgroundImage: backdrop === "desktop" && desktopShot ? `url(${desktopShot})` : undefined,
           }}
           onPointerDown={(e) => {
             (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -173,11 +219,85 @@ export function Display({
           }}
           onPointerMove={(e) => {
             const d = drag.current;
-            if (d) patch({ x: Math.round(d.x + (e.clientX - d.px) / k), y: Math.round(d.y + (e.clientY - d.py) / k) });
+            if (!d) return;
+
+            let rawX = d.x + (e.clientX - d.px) / k;
+            let rawY = d.y + (e.clientY - d.py) / k;
+
+            let gx: number | null = null;
+            let gy: number | null = null;
+            const labels: string[] = [];
+
+            const useGrid10 = grid10 || e.shiftKey;
+            const bypassSnap = e.altKey;
+
+            if (useGrid10) {
+              rawX = Math.round(rawX / 10) * 10;
+              rawY = Math.round(rawY / 10) * 10;
+              labels.push("10px GRID");
+            }
+
+            if (snapEnabled && !bypassSnap) {
+              const snapDist = 14;
+
+              // Snap X to center (x = 0)
+              if (Math.abs(rawX) <= snapDist) {
+                rawX = 0;
+                gx = mw / 2;
+                labels.push("CENTER X");
+              } else {
+                const leftSnap = -mw / 2 + bw / 2;
+                const rightSnap = mw / 2 - bw / 2;
+                if (Math.abs(rawX - leftSnap) <= snapDist) {
+                  rawX = leftSnap;
+                  gx = 0;
+                  labels.push("LEFT EDGE");
+                } else if (Math.abs(rawX - rightSnap) <= snapDist) {
+                  rawX = rightSnap;
+                  gx = mw;
+                  labels.push("RIGHT EDGE");
+                }
+              }
+
+              // Snap Y to center (y = 0)
+              if (Math.abs(rawY) <= snapDist) {
+                rawY = 0;
+                gy = mh / 2;
+                labels.push("CENTER Y");
+              } else {
+                const topSnap = -mh / 2 + bh / 2;
+                const bottomSnap = mh / 2 - bh / 2;
+                if (Math.abs(rawY - topSnap) <= snapDist) {
+                  rawY = topSnap;
+                  gy = 0;
+                  labels.push("TOP EDGE");
+                } else if (Math.abs(rawY - bottomSnap) <= snapDist) {
+                  rawY = bottomSnap;
+                  gy = mh;
+                  labels.push("BOTTOM EDGE");
+                }
+              }
+            }
+
+            setGuides({ gx, gy });
+            setSnapBadge(labels.join(" · "));
+            patch({ x: Math.round(rawX), y: Math.round(rawY) });
           }}
-          onPointerUp={() => (drag.current = null)}
+          onPointerUp={() => {
+            drag.current = null;
+            setGuides({ gx: null, gy: null });
+            setSnapBadge("");
+          }}
+          onPointerCancel={() => {
+            drag.current = null;
+            setGuides({ gx: null, gy: null });
+            setSnapBadge("");
+          }}
         >
-          {backdrop === "sample" && <SampleScene />}
+          {guides.gx !== null && <div className="guide v" style={{ left: `${(guides.gx / mw) * 100}%` }} />}
+          {guides.gy !== null && <div className="guide h" style={{ top: `${(guides.gy / mh) * 100}%` }} />}
+          {snapBadge && <div className="guide-badge mono">{snapBadge}</div>}
+
           <OverlayLayer src={src} imgW={item.width} imgH={item.height} t={t} monitorW={mw} monitorH={mh} k={k}>
             {adjusting && (
               <div
@@ -197,8 +317,9 @@ export function Display({
           )}
           <div className="stage-tag mono">{mon ? monitorLabel(mon) : "Display"}</div>
         </div>
-        {note && <div className="error">{note}</div>}
-        <div className="muted small">Tip: drag inside the preview to reposition. What you see here is rendered by the same engine as the live overlay.</div>
+        <div className="muted small">
+          Tip: Drag inside preview to reposition • Hold <span className="mono" style={{ color: "var(--cyan)" }}>Shift</span> for 10px snap • Hold <span className="mono" style={{ color: "var(--pink)" }}>Alt</span> for free drag • Visual guides snap to monitor center &amp; edges.
+        </div>
       </section>
 
       <aside className="inspector card bracket">
@@ -295,7 +416,8 @@ export function Display({
             <div className="scale-quick-row">
               <button className="btn small outline num-btn" onClick={() => patch({ scale: clamp(t.scale - 1, 1, 400) })} title="Decrease scale by 1%">-</button>
               <button className="btn small outline num-btn" onClick={() => patch({ scale: clamp(t.scale + 1, 1, 400) })} title="Increase scale by 1%">+</button>
-              <button className="btn small outline" onClick={() => patch({ scale: 100 })}>Reset (1:1 Native)</button>
+              <button className="btn small outline" onClick={native1to1} title="Reset to original 100% native size">1:1 Native</button>
+              <button className="btn small outline" onClick={fitScreen} title="Fit to screen dimensions">Fit Screen</button>
             </div>
           }
         />
@@ -307,7 +429,9 @@ export function Display({
             <select className="input mini" value={step} onChange={(e) => setStep(Number(e.target.value))}>
               <option value={1}>1 px</option>
               <option value={5}>5 px</option>
+              <option value={10}>10 px</option>
               <option value={25}>25 px</option>
+              <option value={50}>50 px</option>
             </select>
           </div>
           <div className="pos-row">
@@ -320,18 +444,84 @@ export function Display({
             <div className="dpad">
               <button onClick={() => nudge(0, -1)} style={{ gridArea: "u" }} aria-label="Up">▲</button>
               <button onClick={() => nudge(-1, 0)} style={{ gridArea: "l" }} aria-label="Left">◀</button>
-              <button onClick={() => patch({ x: 0, y: 0 })} style={{ gridArea: "c" }} aria-label="Center" title="Snap to center">●</button>
+              <button onClick={snapCenter} style={{ gridArea: "c" }} aria-label="Center" title="Snap to center">●</button>
               <button onClick={() => nudge(1, 0)} style={{ gridArea: "r" }} aria-label="Right">▶</button>
               <button onClick={() => nudge(0, 1)} style={{ gridArea: "d" }} aria-label="Down">▼</button>
             </div>
           </div>
-          <div className="btn-row">
-            <button className="btn small outline" onClick={() => patch({ x: 0, y: 0 })}>Snap to Center</button>
-            <button className="btn small outline" onClick={fit}>Fit to Screen</button>
+          <div className="btn-row" style={{ marginTop: 8 }}>
+            <button className="btn small outline" onClick={snapCenter} title="Set X:0, Y:0">Snap Center</button>
+            <button className="btn small outline" onClick={roundTo10} title="Round current X & Y to nearest 10px">Round 10px</button>
+            <button className="btn small outline" onClick={fitScreen} title="Scale & center to fit monitor">Fit Screen</button>
+            <button className="btn small outline" onClick={fillScreen} title="Scale & center to fill monitor without border gaps">Fill Screen</button>
           </div>
         </div>
 
         <h5 className="section">Color &amp; Visual Tweaks</h5>
+
+        {/* Rainbow / Chroma Cycle Card */}
+        <div
+          className="rainbow-card"
+          style={{
+            marginBottom: 14,
+            padding: 12,
+            background: t.chromaCycle ? "rgba(236, 72, 153, 0.08)" : "#0c0d18",
+            border: t.chromaCycle ? "1px solid var(--pink)" : "1px solid var(--border)",
+            borderRadius: 6,
+            boxShadow: t.chromaCycle ? "0 0 16px rgba(236, 72, 153, 0.2)" : undefined,
+            transition: "all 0.2s ease",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 18 }}>🌈</span>
+              <div>
+                <div className="bold" style={{ fontSize: 13, color: t.chromaCycle ? "var(--pink)" : "var(--text)" }}>
+                  Animated Rainbow / Chroma Cycle
+                </div>
+                <div className="mono mini muted" style={{ fontSize: 10 }}>
+                  360° animated spectrum cycling · 0% CPU cost
+                </div>
+              </div>
+            </div>
+            <Toggle
+              checked={Boolean(t.chromaCycle)}
+              onChange={(v) => patch({ chromaCycle: v })}
+            />
+          </div>
+
+          {t.chromaCycle && (
+            <div style={{ marginTop: 12, borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 10 }}>
+              <SliderRow
+                label="Cycle Speed"
+                value={t.chromaSpeed || 6}
+                min={1}
+                max={25}
+                suffix="s"
+                onChange={(v) => patch({ chromaSpeed: v })}
+              />
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                {[
+                  { label: "⚡ Turbo (2s)", sec: 2 },
+                  { label: "🌈 Smooth (6s)", sec: 6 },
+                  { label: "✨ Ambient (12s)", sec: 12 },
+                  { label: "🌌 Slow (20s)", sec: 20 },
+                ].map((preset) => (
+                  <button
+                    key={preset.sec}
+                    type="button"
+                    className={`btn mini ${(t.chromaSpeed || 6) === preset.sec ? "primary" : "outline"}`}
+                    style={{ flex: 1, padding: "3px 4px", fontSize: 10 }}
+                    onClick={() => patch({ chromaSpeed: preset.sec })}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
         <SliderRow
           label="Hue Shift / Tint"
           value={t.hue}
@@ -393,27 +583,5 @@ export function Display({
         </div>
       </aside>
     </div>
-  );
-}
-
-/** Fake FPS scene so overlays can be aligned against typical HUD landmarks. */
-function SampleScene() {
-  return (
-    <svg className="sample" viewBox="0 0 1600 900" preserveAspectRatio="none">
-      <defs>
-        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#1d2b4a" />
-          <stop offset="0.55" stopColor="#6b5b7b" />
-          <stop offset="1" stopColor="#2a2433" />
-        </linearGradient>
-      </defs>
-      <rect width="1600" height="900" fill="url(#sky)" />
-      <path d="M0 560 L240 380 L420 520 L640 330 L900 540 L1180 360 L1400 500 L1600 420 V900 H0Z" fill="#171421" />
-      <rect y="640" width="1600" height="260" fill="#0f0d16" />
-      <rect x="120" y="60" width="210" height="150" rx="6" fill="#00000066" stroke="#ffffff33" />
-      <rect x="1190" y="760" width="300" height="50" rx="4" fill="#00000077" stroke="#ffffff33" />
-      <rect x="110" y="760" width="360" height="40" rx="4" fill="#00000077" stroke="#ffffff33" />
-      <g stroke="#ffffffaa" strokeWidth="2"><path d="M790 450h-16M810 450h16M800 440v-12M800 460v12" /></g>
-    </svg>
   );
 }
