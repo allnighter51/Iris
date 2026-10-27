@@ -182,6 +182,7 @@ pub struct Settings {
     pub low_resource: bool,
     /// layer role -> global toggle hotkey
     pub layer_hotkeys: HashMap<String, String>,
+    pub check_updates_on_startup: bool,
 }
 
 impl Default for Settings {
@@ -201,6 +202,7 @@ impl Default for Settings {
             hardware_acceleration: true,
             low_resource: false,
             layer_hotkeys: HashMap::new(),
+            check_updates_on_startup: true,
         }
     }
 }

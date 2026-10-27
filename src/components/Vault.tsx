@@ -31,9 +31,10 @@ interface Props {
   onLoad: (item: VaultItem) => void;
   onSendToStack: (item: VaultItem) => void;
   onLoadPreset: (p: CompositePreset) => void;
+  onUpload?: () => void;
 }
 
-export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, onSendToStack, onLoadPreset }: Props) {
+export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, onSendToStack, onLoadPreset, onUpload }: Props) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("new");
   const [selected, setSelected] = useState<string | null>(null);
@@ -324,6 +325,7 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
           onSaved={(v) => {
             setVault(v);
             setDialog(null);
+            onUpload?.();
           }}
         />
       )}

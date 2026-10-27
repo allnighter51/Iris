@@ -65,8 +65,9 @@ pub fn register_hotkeys(app: &AppHandle) {
 pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show Iris", true, None::<&str>)?;
     let toggle = MenuItem::with_id(app, "toggle", "Toggle Overlay", true, None::<&str>)?;
+    let check_update = MenuItem::with_id(app, "check_update", "Check for Updates...", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &toggle, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &toggle, &check_update, &quit])?;
     TrayIconBuilder::new()
         .icon(app.default_window_icon().unwrap().clone())
         .tooltip("Iris")
@@ -75,6 +76,7 @@ pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, ev| match ev.id.as_ref() {
             "show" => show_main(app),
             "toggle" => overlay::toggle(app),
+            "check_update" => crate::updater::handle_tray_action(app),
             "quit" => app.exit(0),
             _ => {}
         })

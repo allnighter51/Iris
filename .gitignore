@@ -7,3 +7,4 @@ src-tauri/gen
 Iris.exe
 .vscode/
 .idea/
+.rustup/

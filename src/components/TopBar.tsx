@@ -1,9 +1,9 @@
 import type { Tab } from "../types";
 
 const TABS: { id: Tab; label: string }[] = [
+  { id: "vault", label: "Vault" },
   { id: "display", label: "Display" },
   { id: "layering", label: "Layering" },
-  { id: "vault", label: "Vault" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -13,12 +13,14 @@ export function TopBar({
   active,
   waiting,
   onForceShow,
+  hasUpdate,
 }: {
   tab: Tab;
   setTab: (t: Tab) => void;
   active: boolean;
   waiting?: boolean;
   onForceShow?: () => void;
+  hasUpdate?: boolean;
 }) {
   return (
     <header className="topbar">
@@ -37,8 +39,28 @@ export function TopBar({
       </div>
       <nav className="tabs">
         {TABS.map((t) => (
-          <button key={t.id} className={tab === t.id ? "active" : ""} onClick={() => setTab(t.id)}>
+          <button
+            key={t.id}
+            className={tab === t.id ? "active" : ""}
+            onClick={() => setTab(t.id)}
+            style={{ position: "relative" }}
+          >
             {t.label}
+            {t.id === "settings" && hasUpdate && (
+              <span
+                style={{
+                  position: "absolute",
+                  top: 7,
+                  right: 8,
+                  width: 7,
+                  height: 7,
+                  borderRadius: "50%",
+                  background: "var(--cyan)",
+                  boxShadow: "0 0 8px var(--cyan)",
+                }}
+                title="Update available"
+              />
+            )}
           </button>
         ))}
       </nav>

@@ -14,11 +14,13 @@ import {
   type OverlayStatus,
   type Settings,
   type Tab,
+  type UpdateStatus,
   type VaultData,
   type VaultItem,
 } from "./types";
 import { filterItems } from "./util";
 import { fromPreset, newLayer, toScene, uid } from "./layers";
+import { loadUsage, saveUsage, type UsageStats } from "./usage";
 import { TopBar } from "./components/TopBar";
 import { Vault } from "./components/Vault";
 import { Display } from "./components/Display";
@@ -35,6 +37,7 @@ export default function App() {
   const [status, setStatus] = useState<OverlayStatus>({ enabled: false, visible: false, gameRunning: false });
   const [ready, setReady] = useState(false);
   const [currentForegroundExe, setCurrentForegroundExe] = useState<string | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ status: "idle" });
   const [toast, setToast] = useState<{
     title: string;
     sub: string;
@@ -47,6 +50,35 @@ export default function App() {
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const lastAutoGame = useRef<string | null>(null);
+
+  // Usage Telemetry (time, swaps, uploads, favorite overlay)
+  const usageStatsRef = useRef<UsageStats>(loadUsage());
+  const [usageStats, setUsageStats] = useState<UsageStats>(() => usageStatsRef.current);
+  const lastActiveOverlayIdRef = useRef<string | null>(null);
+
+  const recordSwap = useCallback((newId: string | null) => {
+    if (!newId) return;
+    if (lastActiveOverlayIdRef.current && lastActiveOverlayIdRef.current !== newId) {
+      const next: UsageStats = {
+        ...usageStatsRef.current,
+        totalSwaps: usageStatsRef.current.totalSwaps + 1,
+      };
+      usageStatsRef.current = next;
+      saveUsage(next);
+      setUsageStats(next);
+    }
+    lastActiveOverlayIdRef.current = newId;
+  }, []);
+
+  const recordUpload = useCallback(() => {
+    const next: UsageStats = {
+      ...usageStatsRef.current,
+      totalUploads: usageStatsRef.current.totalUploads + 1,
+    };
+    usageStatsRef.current = next;
+    saveUsage(next);
+    setUsageStats(next);
+  }, []);
 
   // Layering studio state (kept here so Vault actions and tab switches preserve it)
   const [layers, setLayers] = useState<Layer[]>([]);
@@ -71,11 +103,63 @@ export default function App() {
     }
   }, []);
 
+  // Live app and active overlay telemetry timer
   useEffect(() => {
-    Promise.all([api.vaultLoad(), api.settingsGet(), api.listMonitors()]).then(([v, s, m]) => {
+    const timer = setInterval(() => {
+      const cur = usageStatsRef.current;
+      const nextAppTime = cur.totalAppTimeSeconds + 1;
+      const nextOverlayTime = { ...cur.overlayTime };
+
+      if (overlay.enabled) {
+        const activeKey = live && activePresetId ? `preset:${activePresetId}` : overlay.itemId;
+        if (activeKey) {
+          nextOverlayTime[activeKey] = (nextOverlayTime[activeKey] || 0) + 1;
+        }
+      }
+
+      const nextStats: UsageStats = {
+        ...cur,
+        totalAppTimeSeconds: nextAppTime,
+        overlayTime: nextOverlayTime,
+      };
+      usageStatsRef.current = nextStats;
+
+      if (nextAppTime % 5 === 0) {
+        saveUsage(nextStats);
+      }
+
+      if (tab === "settings" || nextAppTime % 10 === 0) {
+        setUsageStats(nextStats);
+      }
+    }, 1000);
+
+    return () => {
+      clearInterval(timer);
+      saveUsage(usageStatsRef.current);
+    };
+  }, [overlay.enabled, overlay.itemId, live, activePresetId, tab]);
+
+  useEffect(() => {
+    if (tab === "settings") {
+      setUsageStats({ ...usageStatsRef.current });
+    }
+  }, [tab]);
+
+  useEffect(() => {
+    Promise.all([api.vaultLoad(), api.settingsGet(), api.listMonitors(), api.updaterGetStatus()]).then(([v, s, m, u]) => {
       setVault(v);
+      if (v && v.items.length > usageStatsRef.current.totalUploads) {
+        const next = { ...usageStatsRef.current, totalUploads: v.items.length };
+        usageStatsRef.current = next;
+        saveUsage(next);
+        setUsageStats(next);
+      }
       setSettings(s);
       setMonitors(m);
+      if (u) setUpdateStatus(u);
+      setReady(true);
+    }).catch(() => {
+      // Fail gracefully if any initial call fails
       setReady(true);
     });
     const un1 = listen<OverlayStatus>("overlay-status", (e) => {
@@ -91,9 +175,29 @@ export default function App() {
         return ls.map((l) => (l.role === e.payload ? { ...l, visible: show } : l));
       }),
     );
+    // updater live status updates
+    const un3 = listen<UpdateStatus>("updater-status", (e) => {
+      setUpdateStatus(e.payload);
+    });
+    // tray navigation event
+    const un4 = listen<string>("navigate-tab", (e) => {
+      setTab(e.payload as Tab);
+    });
+    // subtle non-intrusive toast when an update is available
+    const un5 = listen<string>("updater-available-toast", (e) => {
+      setToast({
+        title: `✨ Iris Update v${e.payload} Available`,
+        sub: "Review release notes & download in Settings.",
+        actionLabel: "View in Settings",
+        onAction: () => setTab("settings"),
+      });
+    });
     return () => {
       un1.then((f) => f());
       un2.then((f) => f());
+      un3.then((f) => f());
+      un4.then((f) => f());
+      un5.then((f) => f());
     };
   }, []);
 
@@ -125,6 +229,7 @@ export default function App() {
   const loadItem = useCallback(
     (item: VaultItem, goToDisplay = true) => {
       if (!vault) return;
+      recordSwap(item.id);
       setLive(false);
       setOverlay((o) => ({
         ...o,
@@ -137,7 +242,7 @@ export default function App() {
       }));
       if (goToDisplay) setTab("display");
     },
-    [vault],
+    [vault, recordSwap],
   );
 
   /** Append a Vault item on top of the stack (never replaces existing layers). */
@@ -155,24 +260,29 @@ export default function App() {
     [addLayer],
   );
 
-  const loadPreset = useCallback((p: CompositePreset, pushLive: boolean, goToLayering = false) => {
-    setLayers(fromPreset(p.layers));
-    setActivePresetId(p.id);
-    if (p.refW && p.refH) setCanvasRes({ w: p.refW, h: p.refH });
-    if (pushLive) {
-      setLive(true);
-      setOverlay((o) => ({ ...o, enabled: true }));
-    }
-    if (goToLayering) setTab("layering");
-  }, []);
+  const loadPreset = useCallback(
+    (p: CompositePreset, pushLive: boolean, goToLayering = false) => {
+      recordSwap(`preset:${p.id}`);
+      setLayers(fromPreset(p.layers));
+      setActivePresetId(p.id);
+      if (p.refW && p.refH) setCanvasRes({ w: p.refW, h: p.refH });
+      if (pushLive) {
+        setLive(true);
+        setOverlay((o) => ({ ...o, enabled: true }));
+      }
+      if (goToLayering) setTab("layering");
+    },
+    [recordSwap, setCanvasRes],
+  );
 
   const pushComposite = useCallback(() => {
+    recordSwap(activePresetId ? `preset:${activePresetId}` : "composite_live");
     setLive(true);
     setOverlay((o) => ({ ...o, enabled: true }));
     if (settingsRef.current?.targetMode === "game" && !status.gameRunning) {
       saveSettings({ targetMode: "topmost" });
     }
-  }, [status.gameRunning, saveSettings]);
+  }, [activePresetId, recordSwap, status.gameRunning, saveSettings]);
 
   // Auto-Game Detection & Profile Auto-Switching
   useEffect(() => {
@@ -279,6 +389,7 @@ export default function App() {
             width: bmp.width,
             height: bmp.height,
           });
+          recordUpload();
           const updatedVault = await api.vaultLoad();
           setVault(updatedVault);
           setToast({
@@ -368,6 +479,32 @@ export default function App() {
   if (!vault || !settings) return <div className="boot">INITIALIZING IRIS…</div>;
   const activeItem = vault.items.find((i) => i.id === overlay.itemId) ?? null;
 
+  const handleCheckUpdate = async () => {
+    try {
+      await api.updaterCheck();
+    } catch (e) {
+      console.error("Failed to check for updates:", e);
+    }
+  };
+
+  const handleDownloadUpdate = async () => {
+    try {
+      await api.updaterDownloadAndInstall();
+    } catch (e) {
+      console.error("Failed to download update:", e);
+    }
+  };
+
+  const handleRestartUpdate = async () => {
+    try {
+      await api.updaterRestart();
+    } catch (e) {
+      console.error("Failed to restart for update:", e);
+    }
+  };
+
+  const hasUpdate = updateStatus.status === "available" || updateStatus.status === "downloaded";
+
   return (
     <div className="app">
       <TopBar
@@ -376,6 +513,7 @@ export default function App() {
         active={status.visible}
         waiting={overlay.enabled && !status.visible}
         onForceShow={() => saveSettings({ targetMode: "topmost" })}
+        hasUpdate={hasUpdate}
       />
       <main>
         {tab === "vault" && (
@@ -388,6 +526,7 @@ export default function App() {
             onLoad={loadItem}
             onSendToStack={sendToStack}
             onLoadPreset={(p) => loadPreset(p, true, true)}
+            onUpload={recordUpload}
           />
         )}
         {tab === "display" && (
@@ -433,6 +572,12 @@ export default function App() {
             save={saveSettings}
             currentForegroundExe={currentForegroundExe}
             vault={vault}
+            usageStats={usageStats}
+            activeOverlayItemId={overlay.itemId}
+            updateStatus={updateStatus}
+            onCheckUpdate={handleCheckUpdate}
+            onDownloadUpdate={handleDownloadUpdate}
+            onRestartUpdate={handleRestartUpdate}
           />
         )}
       </main>

@@ -6,6 +6,7 @@ import type {
   OverlayState,
   Settings,
   Transform,
+  UpdateStatus,
   VaultData,
   VaultItem,
 } from "./types";
@@ -43,6 +44,10 @@ export const api = {
   listMonitors: () => invoke<MonitorInfo[]>("list_monitors"),
   settingsGet: () => invoke<Settings>("settings_get"),
   settingsSave: (settings: Settings) => invoke<Settings>("settings_save", { settings }),
+  updaterCheck: () => invoke<UpdateStatus>("updater_check"),
+  updaterDownloadAndInstall: () => invoke<void>("updater_download_and_install"),
+  updaterRestart: () => invoke<void>("updater_restart"),
+  updaterGetStatus: () => invoke<UpdateStatus>("updater_get_status"),
 };
 
 export const assetUrl = (dir: string, file: string) => convertFileSrc(`${dir}\\${file}`);

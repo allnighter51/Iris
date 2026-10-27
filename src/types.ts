@@ -217,7 +217,19 @@ export interface Settings {
   hardwareAcceleration: boolean;
   lowResource: boolean;
   layerHotkeys: Record<string, string>;
+  checkUpdatesOnStartup?: boolean;
 }
+
+export type { UsageStats } from "./usage";
+
+export type UpdateStatus =
+  | { status: "idle" }
+  | { status: "checking" }
+  | { status: "upToDate"; currentVersion: string }
+  | { status: "available"; version: string; currentVersion: string; body?: string; date?: string }
+  | { status: "downloading"; version: string; progress: number; downloaded: number; total?: number }
+  | { status: "downloaded"; version: string }
+  | { status: "error"; message: string };
 
 export interface OverlayState {
   enabled: boolean;

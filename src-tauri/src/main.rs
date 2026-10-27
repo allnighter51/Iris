@@ -3,6 +3,7 @@
 mod model;
 mod overlay;
 mod system;
+mod updater;
 mod vault;
 mod win32;
 
@@ -32,6 +33,8 @@ fn main() {
                 }
             }
         }))
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new(root, settings))
         .invoke_handler(tauri::generate_handler![
             vault::vault_load,
@@ -49,6 +52,10 @@ fn main() {
             system::list_monitors,
             system::settings_get,
             system::settings_save,
+            updater::updater_check,
+            updater::updater_download_and_install,
+            updater::updater_restart,
+            updater::updater_get_status,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -57,6 +64,7 @@ fn main() {
             system::register_hotkeys(&handle);
             system::register_url_protocol();
             system::spawn_game_watcher(handle.clone());
+            updater::check_on_startup(handle.clone());
             if !std::env::args().any(|a| a == "--minimized") {
                 system::show_main(&handle);
             }

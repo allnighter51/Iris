@@ -3,5 +3,9 @@
   "identifier": "default",
   "description": "Iris main + overlay windows",
   "windows": ["main", "overlay"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "updater:default",
+    "process:default"
+  ]
 }
