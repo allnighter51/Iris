@@ -205,7 +205,7 @@ export function SettingsView({
           <div className="settings-sidebar-footer">
             <div className="settings-version-card">
               <div className="settings-version-top">
-                <span className="settings-version-title mono">Iris v0.1.0</span>
+                <span className="settings-version-title mono">Iris v0.1.1</span>
                 <span
                   className={`settings-update-dot ${updateStatus.status === "available" ? "has-update" : updateStatus.status === "upToDate" ? "ok" : ""}`}
                   title={updateStatus.status === "available" ? "Update available!" : updateStatus.status === "upToDate" ? "Up to date" : "Standing by"}
@@ -534,7 +534,7 @@ export function SettingsView({
 
                 <SettingsRow title="App Version &amp; Repository" desc="Iris Desktop Overlay utility releases are distributed via GitHub Releases.">
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span className="mono bold" style={{ color: "var(--cyan)" }}>Iris v0.1.0</span>
+                    <span className="mono bold" style={{ color: "var(--cyan)" }}>Iris v0.1.1</span>
                     <a href="https://github.com/allnighter51/Iris" target="_blank" rel="noreferrer" className="tag mono" style={{ textDecoration: "none", cursor: "pointer" }}>
                       github.com/allnighter51/Iris
                     </a>
