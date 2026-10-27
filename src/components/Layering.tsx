@@ -17,7 +17,7 @@ import { layerBox, snapBox, uid, withZ, type Box } from "../layers";
 import { clamp, monitorLabel } from "../util";
 import { LayerDrawer } from "./LayerDrawer";
 import { LayerPanel } from "./LayerPanel";
-import { REF_OPTIONS, RefBackdrop, SceneImages, type RefKey } from "./SceneView";
+import { REF_OPTIONS, SceneImages, type RefKey } from "./SceneView";
 import { Modal } from "./ui";
 
 interface Props {
@@ -86,9 +86,7 @@ export function Layering(p: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [zoom, setZoom] = useState<"fit" | 50 | 100>("fit");
   const [ref, setRef] = useState<RefKey>("grid");
-  const [shot, setShot] = useState<string | null>(null);
   const [customShot, setCustomShot] = useState<string | null>(() => localStorage.getItem("iris_custom_ref_shot"));
-  const [note, setNote] = useState("");
   const [guides, setGuides] = useState<{ xs: number[]; ys: number[] }>({ xs: [], ys: [] });
   const [saveOpen, setSaveOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -357,26 +355,6 @@ export function Layering(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sel, layers, saveOpen, exportOpen, importOpen]);
 
-  async function captureDesktop() {
-    setNote("");
-    try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-      const v = document.createElement("video");
-      v.srcObject = stream;
-      await v.play();
-      const c = document.createElement("canvas");
-      c.width = v.videoWidth;
-      c.height = v.videoHeight;
-      c.getContext("2d")!.drawImage(v, 0, 0);
-      stream.getTracks().forEach((t) => t.stop());
-      setShot(c.toDataURL("image/jpeg", 0.85));
-      setRef("desktop");
-    } catch {
-      setNote("Desktop capture was cancelled or is unavailable.");
-      setRef("grid");
-    }
-  }
-
   function handleCustomScreenshot(f: File | undefined) {
     if (!f) return;
     const reader = new FileReader();
@@ -404,12 +382,7 @@ export function Layering(p: Props) {
 
   const stageWidth = zoom === "fit" ? "100%" : `${(W * zoom) / 100}px`;
 
-  const bgImage =
-    ref === "desktop" && shot
-      ? `url(${shot})`
-      : ref === "custom" && customShot
-        ? `url(${customShot})`
-        : undefined;
+  const bgImage = ref === "custom" && customShot ? `url(${customShot})` : undefined;
 
   const previewLayers = soloId ? layers.map((l) => (l.id === soloId ? { ...l, visible: true } : { ...l, visible: false })) : layers;
   const selBox = sel && sel.visible ? boxOf(sel) : null;
@@ -461,7 +434,6 @@ export function Layering(p: Props) {
                 setSelectedId(p.addLayer(it, { x: Math.round(mx - W / 2), y: Math.round(my - H / 2) }));
               }}
             >
-              {(ref === "ow2" || ref === "valorant" || ref === "rivals") && <RefBackdrop kind={ref} />}
               {ref === "custom" && !customShot && (
                 <div className="empty-ref-prompt" onClick={() => customInput.current?.click()}>
                   <div className="prompt-icon">&#x1F4F7;</div>
@@ -524,8 +496,7 @@ export function Layering(p: Props) {
               value={ref}
               onChange={(e) => {
                 const v = e.target.value as RefKey;
-                if (v === "desktop" && !shot) captureDesktop();
-                else if (v === "custom" && !customShot) customInput.current?.click();
+                if (v === "custom" && !customShot) customInput.current?.click();
                 setRef(v);
               }}
               title="Reference backdrop"
@@ -616,7 +587,6 @@ export function Layering(p: Props) {
               {grid10 ? "✓ 10px Grid" : "10px Grid"}
             </button>
           </div>
-          {note && <div className="error">{note}</div>}
           <div className="muted small tips">
             Drag to move · corner handles scale · <b>C</b> crop tool · arrows nudge 1px (<b>Shift</b> 10px) · <b>Ctrl+D</b> duplicate · <b>Del</b> delete · hold <b>Alt</b> to bypass snapping · drop Vault items onto the canvas.
           </div>
