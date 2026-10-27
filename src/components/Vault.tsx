@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, assetUrl } from "../api";
 import { ELEMENT_TAGS, FILTER_GAMES, GAMES, type CompositePreset, type VaultData, type VaultItem } from "../types";
 import { StackThumb } from "./SceneView";
 import { filterItems, gameClass, resolutionTag, type SortKey } from "../util";
 import { Modal } from "./ui";
 import { UploadModal } from "./UploadModal";
+
+export type VaultViewMode = "grid" | "cards" | "carousel" | "list";
 
 type Dialog =
   | { kind: "upload" }
@@ -13,6 +15,7 @@ type Dialog =
   | { kind: "move"; item: VaultItem }
   | { kind: "delete"; item: VaultItem }
   | { kind: "delPreset"; preset: CompositePreset }
+  | { kind: "manageGames" }
   | null;
 
 interface Menu {
@@ -40,6 +43,66 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
   const [selected, setSelected] = useState<string | null>(null);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
+
+  // View Mode: grid | cards | carousel | list
+  const [viewMode, setViewModeState] = useState<VaultViewMode>(() => {
+    try {
+      const saved = localStorage.getItem("iris_vault_view_mode") as VaultViewMode;
+      if (saved && ["grid", "cards", "carousel", "list"].includes(saved)) return saved;
+    } catch {
+      /* ignore */
+    }
+    return "grid";
+  });
+
+  const setViewMode = (mode: VaultViewMode) => {
+    setViewModeState(mode);
+    try {
+      localStorage.setItem("iris_vault_view_mode", mode);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // Hidden game tabs
+  const [hiddenGames, setHiddenGamesState] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("iris_hidden_games");
+      return raw ? (JSON.parse(raw) as string[]) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const saveHiddenGames = (next: string[]) => {
+    setHiddenGamesState(next);
+    try {
+      localStorage.setItem("iris_hidden_games", JSON.stringify(next));
+    } catch {
+      /* ignore */
+    }
+    if (next.includes(filter)) {
+      setFilter("All");
+    }
+  };
+
+  const hideGame = (game: string) => {
+    if (!hiddenGames.includes(game)) {
+      saveHiddenGames([...hiddenGames, game]);
+    }
+  };
+
+  const toggleGameVisibility = (game: string) => {
+    if (hiddenGames.includes(game)) {
+      saveHiddenGames(hiddenGames.filter((g) => g !== game));
+    } else {
+      saveHiddenGames([...hiddenGames, game]);
+    }
+  };
+
+  // Carousel active index
+  const [carouselIdx, setCarouselIdx] = useState(0);
+  const filmstripRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!menu) return;
@@ -73,9 +136,11 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
     () => filterItems(vault.items, filter, query, sort),
     [vault.items, filter, query, sort],
   );
-  const pills = ["All", "Favorites", ...FILTER_GAMES, ...vault.folders];
 
-  // a deleted folder must not leave the filter dangling
+  const visibleGames = FILTER_GAMES.filter((g) => !hiddenGames.includes(g));
+  const pills = ["All", "Favorites", ...visibleGames, ...vault.folders];
+
+  // a deleted folder or hidden game must not leave the filter dangling
   useEffect(() => {
     if (!pills.includes(filter)) setFilter("All");
   });
@@ -83,6 +148,34 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
   const toggleFavorite = async (item: VaultItem) => {
     setVault(await api.updateItem(item.id, { favorite: !item.favorite }));
   };
+
+  // Combined entries for carousel mode
+  const allEntries = useMemo(() => {
+    const list: ({ type: "preset"; data: CompositePreset } | { type: "item"; data: VaultItem })[] = [];
+    presets.forEach((p) => list.push({ type: "preset", data: p }));
+    items.forEach((it) => list.push({ type: "item", data: it }));
+    return list;
+  }, [presets, items]);
+
+  const safeCarouselIdx = Math.max(0, Math.min(carouselIdx, Math.max(0, allEntries.length - 1)));
+  const activeEntry = allEntries[safeCarouselIdx] ?? null;
+
+  // Keyboard navigation for Carousel
+  useEffect(() => {
+    if (viewMode !== "carousel" || allEntries.length <= 1) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setCarouselIdx((i) => (i <= 0 ? allEntries.length - 1 : i - 1));
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        setCarouselIdx((i) => (i >= allEntries.length - 1 ? 0 : i + 1));
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [viewMode, allEntries.length]);
 
   return (
     <div className="page vault" onClick={() => setSelected(null)}>
@@ -94,6 +187,43 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
           + New Folder
         </button>
         <div className="spacer" />
+
+        {/* View Mode Toggle: Grid | Cards | Carousel | List (Left of Search box) */}
+        <div className="seg vault-view-mode-seg" title="Vault View Mode">
+          <button
+            type="button"
+            className={viewMode === "grid" ? "active" : ""}
+            onClick={() => setViewMode("grid")}
+            title="Compact Grid View"
+          >
+            ⊞ Grid
+          </button>
+          <button
+            type="button"
+            className={viewMode === "cards" ? "active" : ""}
+            onClick={() => setViewMode("cards")}
+            title="Detailed Card View"
+          >
+            🗎 Cards
+          </button>
+          <button
+            type="button"
+            className={viewMode === "carousel" ? "active" : ""}
+            onClick={() => setViewMode("carousel")}
+            title="Cinematic Carousel View"
+          >
+            ❖ Carousel
+          </button>
+          <button
+            type="button"
+            className={viewMode === "list" ? "active" : ""}
+            onClick={() => setViewMode("list")}
+            title="Compact List View"
+          >
+            ☰ List
+          </button>
+        </div>
+
         <input
           className="input search"
           placeholder="Search overlays..."
@@ -111,6 +241,7 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
         {pills.map((p) => {
           const custom = vault.folders.includes(p);
           const isFav = p === "Favorites";
+          const isGame = (FILTER_GAMES as readonly string[]).includes(p);
           return (
             <button
               key={p}
@@ -136,11 +267,33 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
                       &times;
                     </span>
                   )}
+                  {isGame && (
+                    <span
+                      className="pill-hide-btn"
+                      title={`Hide "${p}" tab`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        hideGame(p);
+                      }}
+                    >
+                      &times;
+                    </span>
+                  )}
                 </>
               )}
             </button>
           );
         })}
+
+        {/* Manage Tabs Option */}
+        <button
+          type="button"
+          className="pill manage-tabs-pill"
+          onClick={() => setDialog({ kind: "manageGames" })}
+          title="Customize visible game categories"
+        >
+          ⚙ Manage Tabs{hiddenGames.length > 0 ? ` (${hiddenGames.length} hidden)` : ""}
+        </button>
       </div>
 
       {items.length === 0 && presets.length === 0 ? (
@@ -160,7 +313,8 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
                 : "Upload a transparent PNG to get started."}
           </p>
         </div>
-      ) : (
+      ) : viewMode === "grid" ? (
+        /* 1. Classic Compact Grid View */
         <div className="grid">
           {presets.map((p) => {
             const isSel = selected === p.id;
@@ -279,10 +433,467 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
             );
           })}
         </div>
+      ) : viewMode === "cards" ? (
+        /* 2. Detailed Card View */
+        <div className="vault-cards">
+          {presets.map((p) => {
+            const isSel = selected === p.id;
+            return (
+              <article
+                key={p.id}
+                className={`card bracket vshowcase-card${isSel ? " selected" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelected(p.id);
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  onLoadPreset(p);
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setSelected(p.id);
+                  setMenu({ x: e.clientX, y: e.clientY, preset: p });
+                }}
+              >
+                <div className="vshowcase-thumb checker">
+                  <StackThumb layers={p.layers} vault={vault} refW={p.refW} refH={p.refH} />
+                  <div className="badges">
+                    <span className="stack-badge mono">STACK</span>
+                    {p.game && <span className={`tag mono ${gameClass(p.game)}`}>{p.game}</span>}
+                  </div>
+                </div>
+                <div className="vshowcase-body">
+                  <div className="vshowcase-head">
+                    <h4>{p.name}</h4>
+                  </div>
+                  <div className="vshowcase-chips">
+                    <span className="chip folder">{p.layers.length} layers</span>
+                    {p.game && <span className={`chip ${gameClass(p.game)}`}>{p.game}</span>}
+                    <span className="dims mono">{p.refW} × {p.refH}</span>
+                  </div>
+                  <div className="vshowcase-actions">
+                    <button className="btn small primary" onClick={() => onLoadPreset(p)}>
+                      Load Stack
+                    </button>
+                    <button
+                      className="btn small outline"
+                      onClick={async () => setVault(await api.savePreset({ ...p, inVault: false }))}
+                    >
+                      Unpin
+                    </button>
+                    <button
+                      className="btn small outline icon-btn"
+                      title="More options"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelected(p.id);
+                        setMenu({ x: e.clientX, y: e.clientY, preset: p });
+                      }}
+                    >
+                      ⋯
+                    </button>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+          {items.map((item) => {
+            const isSel = selected === item.id;
+            return (
+              <article
+                key={item.id}
+                className={`card bracket vshowcase-card${isSel ? " selected" : ""}${activeId === item.id ? " live" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelected(item.id);
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  onLoad(item);
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setSelected(item.id);
+                  setMenu({ x: e.clientX, y: e.clientY, item });
+                }}
+              >
+                <div className="vshowcase-thumb checker">
+                  <img
+                    loading="lazy"
+                    draggable={false}
+                    src={assetUrl(item.thumb ? vault.thumbsDir : vault.assetsDir, item.thumb ?? item.file)}
+                    alt={item.name}
+                  />
+                  <button
+                    type="button"
+                    className={`fav-star-btn${item.favorite ? " active" : ""}`}
+                    title={item.favorite ? "Remove from Favorites" : "Add to Favorites"}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleFavorite(item);
+                    }}
+                  >
+                    {item.favorite ? "★" : "☆"}
+                  </button>
+                  <div className="badges">
+                    <span className="tag mono">{resolutionTag(item.width, item.height)}</span>
+                    <span className={`tag mono ${gameClass(item.game)}`}>{item.game}</span>
+                  </div>
+                  {activeId === item.id && <span className="live-dot mono">● ACTIVE</span>}
+                </div>
+                <div className="vshowcase-body">
+                  <div className="vshowcase-head">
+                    <h4>{item.name}</h4>
+                  </div>
+                  <div className="vshowcase-chips">
+                    <span className={`chip ${gameClass(item.game)}`}>{item.game}</span>
+                    {item.tag && <span className="chip folder">{ELEMENT_TAGS.find((t) => t.id === item.tag)?.label ?? item.tag}</span>}
+                    {item.folder && <span className="chip folder">&#x25B8; {item.folder}</span>}
+                    <span className="dims mono">{item.width} × {item.height}</span>
+                  </div>
+                  <div className="vshowcase-actions">
+                    <button className="btn small primary" onClick={() => onLoad(item)}>
+                      Equip / Display
+                    </button>
+                    <button className="btn small outline" onClick={() => onSendToStack(item)}>
+                      + Add to Stack
+                    </button>
+                    <button
+                      className="btn small outline icon-btn"
+                      title="More actions"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelected(item.id);
+                        setMenu({ x: e.clientX, y: e.clientY, item });
+                      }}
+                    >
+                      ⋯
+                    </button>
+                  </div>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : viewMode === "carousel" ? (
+        /* 3. Cinematic Carousel / Hero Stage View */
+        <div className="vault-carousel">
+          {activeEntry && (
+            <div className="carousel-stage-card card bracket">
+              <div className="carousel-preview checker">
+                {allEntries.length > 1 && (
+                  <>
+                    <button
+                      type="button"
+                      className="carousel-nav-btn prev"
+                      aria-label="Previous item"
+                      onClick={() => setCarouselIdx((i) => (i <= 0 ? allEntries.length - 1 : i - 1))}
+                    >
+                      ◀
+                    </button>
+                    <button
+                      type="button"
+                      className="carousel-nav-btn next"
+                      aria-label="Next item"
+                      onClick={() => setCarouselIdx((i) => (i >= allEntries.length - 1 ? 0 : i + 1))}
+                    >
+                      ▶
+                    </button>
+                  </>
+                )}
+
+                {activeEntry.type === "item" ? (
+                  <img
+                    draggable={false}
+                    src={assetUrl(activeEntry.data.thumb ? vault.thumbsDir : vault.assetsDir, activeEntry.data.thumb ?? activeEntry.data.file)}
+                    alt={activeEntry.data.name}
+                  />
+                ) : (
+                  <div style={{ width: "80%", height: "80%" }}>
+                    <StackThumb
+                      layers={activeEntry.data.layers}
+                      vault={vault}
+                      refW={activeEntry.data.refW}
+                      refH={activeEntry.data.refH}
+                    />
+                  </div>
+                )}
+
+                <div className="badges">
+                  <span className="tag mono" style={{ color: "var(--cyan)", borderColor: "var(--cyan)" }}>
+                    {safeCarouselIdx + 1} / {allEntries.length}
+                  </span>
+                  {activeEntry.type === "item" ? (
+                    <>
+                      <span className="tag mono">{resolutionTag(activeEntry.data.width, activeEntry.data.height)}</span>
+                      <span className={`tag mono ${gameClass(activeEntry.data.game)}`}>{activeEntry.data.game}</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="stack-badge mono">STACK</span>
+                      {activeEntry.data.game && <span className={`tag mono ${gameClass(activeEntry.data.game)}`}>{activeEntry.data.game}</span>}
+                    </>
+                  )}
+                </div>
+
+                {activeEntry.type === "item" && activeId === activeEntry.data.id && (
+                  <span className="live-dot mono">● ACTIVE ON SCREEN</span>
+                )}
+              </div>
+
+              <div className="carousel-stage-bar">
+                <div>
+                  <h3 style={{ margin: "0 0 6px", fontSize: 18, color: "var(--text)" }}>
+                    {activeEntry.type === "item" && activeEntry.data.favorite ? "★ " : ""}
+                    {activeEntry.data.name}
+                  </h3>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span className={`chip ${activeEntry.data.game ? gameClass(activeEntry.data.game) : "folder"}`}>
+                      {activeEntry.data.game || "Custom"}
+                    </span>
+                    {activeEntry.type === "item" && activeEntry.data.tag && (
+                      <span className="chip folder">{ELEMENT_TAGS.find((t) => t.id === activeEntry.data.tag)?.label ?? activeEntry.data.tag}</span>
+                    )}
+                    {activeEntry.type === "item" && activeEntry.data.folder && (
+                      <span className="chip folder">▸ {activeEntry.data.folder}</span>
+                    )}
+                    <span className="dims mono">
+                      {activeEntry.type === "item" ? `${activeEntry.data.width} × ${activeEntry.data.height}` : `${activeEntry.data.refW} × ${activeEntry.data.refH} (${activeEntry.data.layers.length} layers)`}
+                    </span>
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  {activeEntry.type === "item" ? (
+                    <>
+                      <button
+                        type="button"
+                        className={`btn small ${activeEntry.data.favorite ? "primary" : "outline"}`}
+                        onClick={() => toggleFavorite(activeEntry.data)}
+                      >
+                        {activeEntry.data.favorite ? "★ Favorited" : "☆ Favorite"}
+                      </button>
+                      <button className="btn small primary" onClick={() => onLoad(activeEntry.data)}>
+                        Equip to Screen
+                      </button>
+                      <button className="btn small outline" onClick={() => onSendToStack(activeEntry.data)}>
+                        + Add to Stack
+                      </button>
+                      <button
+                        className="btn small outline icon-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelected(activeEntry.data.id);
+                          setMenu({ x: e.clientX, y: e.clientY, item: activeEntry.data });
+                        }}
+                      >
+                        ⋯
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button className="btn small primary" onClick={() => onLoadPreset(activeEntry.data)}>
+                        Load Stack to Live
+                      </button>
+                      <button
+                        className="btn small outline icon-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelected(activeEntry.data.id);
+                          setMenu({ x: e.clientX, y: e.clientY, preset: activeEntry.data });
+                        }}
+                      >
+                        ⋯
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Filmstrip Carousel Reel */}
+          <div className="carousel-reel-wrap" ref={filmstripRef}>
+            {allEntries.map((entry, idx) => {
+              const isActive = idx === safeCarouselIdx;
+              return (
+                <div
+                  key={entry.type === "item" ? entry.data.id : entry.data.id}
+                  className={`carousel-reel-thumb checker${isActive ? " active" : ""}`}
+                  onClick={() => setCarouselIdx(idx)}
+                  title={entry.data.name}
+                >
+                  {entry.type === "item" ? (
+                    <img
+                      draggable={false}
+                      src={assetUrl(entry.data.thumb ? vault.thumbsDir : vault.assetsDir, entry.data.thumb ?? entry.data.file)}
+                      alt={entry.data.name}
+                    />
+                  ) : (
+                    <StackThumb
+                      layers={entry.data.layers}
+                      vault={vault}
+                      refW={entry.data.refW}
+                      refH={entry.data.refH}
+                    />
+                  )}
+                  {entry.type === "item" && activeId === entry.data.id && (
+                    <span className="live-dot mono" style={{ fontSize: 9 }}>●</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        /* 4. Dense Tabular List View */
+        <div className="vault-list">
+          {presets.map((p) => {
+            const isSel = selected === p.id;
+            return (
+              <div
+                key={p.id}
+                className={`vault-list-row card bracket${isSel ? " selected" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelected(p.id);
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  onLoadPreset(p);
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setSelected(p.id);
+                  setMenu({ x: e.clientX, y: e.clientY, preset: p });
+                }}
+              >
+                <div className="vault-list-thumb checker">
+                  <StackThumb layers={p.layers} vault={vault} refW={p.refW} refH={p.refH} />
+                </div>
+                <span className="stack-badge mono" style={{ fontSize: 10 }}>STACK</span>
+                <span className="vault-list-name" title={p.name}>
+                  {p.name}
+                </span>
+                {p.game && <span className={`chip ${gameClass(p.game)}`}>{p.game}</span>}
+                <span className="chip folder">{p.layers.length} layers</span>
+                <span className="dims mono">{p.refW}×{p.refH}</span>
+                <button
+                  className="btn small primary"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onLoadPreset(p);
+                  }}
+                >
+                  Load Stack
+                </button>
+                <button
+                  className="btn small outline icon-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelected(p.id);
+                    setMenu({ x: e.clientX, y: e.clientY, preset: p });
+                  }}
+                >
+                  ⋯
+                </button>
+              </div>
+            );
+          })}
+          {items.map((item) => {
+            const isSel = selected === item.id;
+            return (
+              <div
+                key={item.id}
+                className={`vault-list-row card bracket${isSel ? " selected" : ""}${activeId === item.id ? " live" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelected(item.id);
+                }}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  onLoad(item);
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setSelected(item.id);
+                  setMenu({ x: e.clientX, y: e.clientY, item });
+                }}
+              >
+                <div className="vault-list-thumb checker">
+                  <img
+                    loading="lazy"
+                    draggable={false}
+                    src={assetUrl(item.thumb ? vault.thumbsDir : vault.assetsDir, item.thumb ?? item.file)}
+                    alt={item.name}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className={`fav-star-btn${item.favorite ? " active" : ""}`}
+                  style={{ position: "static", transform: "none", fontSize: 16 }}
+                  title={item.favorite ? "Remove from Favorites" : "Add to Favorites"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleFavorite(item);
+                  }}
+                >
+                  {item.favorite ? "★" : "☆"}
+                </button>
+                <span className="vault-list-name" title={item.name}>
+                  {item.name}
+                </span>
+                <span className={`chip ${gameClass(item.game)}`}>{item.game}</span>
+                {item.tag && <span className="chip folder">{ELEMENT_TAGS.find((t) => t.id === item.tag)?.label ?? item.tag}</span>}
+                {item.folder && <span className="chip folder">&#x25B8; {item.folder}</span>}
+                <span className="dims mono">{item.width}×{item.height}</span>
+                {activeId === item.id && <span className="tag mono ok">● ACTIVE</span>}
+                <button
+                  className="btn small primary"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onLoad(item);
+                  }}
+                >
+                  Equip
+                </button>
+                <button
+                  className="btn small outline"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSendToStack(item);
+                  }}
+                >
+                  + Stack
+                </button>
+                <button
+                  className="btn small outline icon-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelected(item.id);
+                    setMenu({ x: e.clientX, y: e.clientY, item });
+                  }}
+                >
+                  ⋯
+                </button>
+              </div>
+            );
+          })}
+        </div>
       )}
 
       {menu && (
-        <div className="ctxmenu card" style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 220) }} onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
+        <div
+          className="ctxmenu card"
+          style={{ left: Math.min(menu.x, window.innerWidth - 220), top: Math.min(menu.y, window.innerHeight - 220) }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
           {menu.item && (
             <>
               <button onClick={() => { onLoad(menu.item!); setMenu(null); }}>Load in Display</button>
@@ -354,6 +965,64 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
               }}
             >
               Delete
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {dialog?.kind === "manageGames" && (
+        <Modal title="Manage Game Tabs" onClose={() => setDialog(null)} width={480}>
+          <p className="muted small" style={{ marginBottom: 16 }}>
+            Select which game categories appear in your Vault navigation bar. Unselected games will be hidden from the tab bar.
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 20 }}>
+            {FILTER_GAMES.map((game) => {
+              const isVisible = !hiddenGames.includes(game);
+              return (
+                <label
+                  key={game}
+                  className="card bracket"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "10px 12px",
+                    cursor: "pointer",
+                    background: isVisible ? "#121424" : "#08090f",
+                    borderColor: isVisible ? "var(--cyan)" : "var(--border)",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isVisible}
+                    onChange={() => toggleGameVisibility(game)}
+                  />
+                  <span style={{ fontWeight: isVisible ? 700 : 400, color: isVisible ? "var(--text)" : "var(--muted)" }}>
+                    {game}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                className="btn small outline"
+                onClick={() => saveHiddenGames([])}
+              >
+                Show All
+              </button>
+              <button
+                type="button"
+                className="btn small outline"
+                onClick={() => saveHiddenGames(FILTER_GAMES.filter((g) => g !== "Overwatch"))}
+              >
+                Overwatch Only
+              </button>
+            </div>
+            <button type="button" className="btn small primary" onClick={() => setDialog(null)}>
+              Done
             </button>
           </div>
         </Modal>
