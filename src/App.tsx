@@ -79,7 +79,7 @@ export default function App() {
   const overlayRef = useRef(overlay); overlayRef.current = overlay;
   const liveRef = useRef(live); liveRef.current = live;
   const activePresetIdRef = useRef(activePresetId); activePresetIdRef.current = activePresetId;
-  const appVersionRef = useRef("0.1.1");
+  const appVersionRef = useRef("0.1.2");
   const [canvasRes, setCanvasResState] = useState<CanvasRes | null>(() => {
     try { const raw = localStorage.getItem("iris_canvas_res"); return raw ? (JSON.parse(raw) as CanvasRes) : null; }
     catch { return null; }
@@ -134,7 +134,7 @@ export default function App() {
         }).catch(() => {
           sendTelemetryEvent({
             event: "app_launch",
-            appVersion: "0.1.1",
+            appVersion: "0.1.2",
             resolution: `${window.screen.width}x${window.screen.height}`,
           }, s?.telemetryEnabled ?? true);
         });

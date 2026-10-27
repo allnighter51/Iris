@@ -58,7 +58,7 @@ export async function sendTelemetryEvent(
 
   const body = {
     client_id: clientId,
-    app_version: payload.appVersion || "0.1.1",
+    app_version: payload.appVersion || "0.1.2",
     event: payload.event,
     game_category: payload.gameCategory || null,
     element_type: payload.elementType || null,
