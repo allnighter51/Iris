@@ -307,10 +307,24 @@ export default function App() {
   if (!vault || !settings) return <div className="boot">INITIALIZING IRIS…</div>;
   const activeItem = vault.items.find((i) => i.id === overlay.itemId) ?? null;
   const hasUpdate = updateStatus.status === "available" || updateStatus.status === "downloaded";
+  const equippedName = live ? (vault.presets.find((p) => p.id === activePresetId)?.name || "Composite Loadout") : (activeItem?.name || null);
 
   return (
     <div className="app">
-      <TopBar tab={tab} setTab={setTab} active={status.visible} waiting={overlay.enabled && !status.visible} onForceShow={() => saveSettings({ targetMode: "topmost" })} hasUpdate={hasUpdate} />
+      <TopBar
+        tab={tab}
+        setTab={setTab}
+        active={status.visible}
+        waiting={overlay.enabled && !status.visible}
+        onForceShow={() => saveSettings({ targetMode: "topmost" })}
+        hasUpdate={hasUpdate}
+        overlayEnabled={overlay.enabled}
+        onToggleOverlay={(enabled) => {
+          setOverlay((o) => ({ ...o, enabled }));
+          if (enabled && settings.targetMode === "game" && !status.gameRunning) saveSettings({ targetMode: "topmost" });
+        }}
+        equippedName={equippedName}
+      />
       <main>
         {tab === "vault" && (
           <Vault
