@@ -141,6 +141,10 @@ impl Default for Manifest {
     }
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -159,6 +163,8 @@ pub struct Settings {
     pub low_resource: bool,
     pub layer_hotkeys: HashMap<String, String>,
     pub check_updates_on_startup: bool,
+    #[serde(default = "default_true")]
+    pub telemetry_enabled: bool,
 }
 
 impl Default for Settings {
@@ -179,6 +185,7 @@ impl Default for Settings {
             low_resource: false,
             layer_hotkeys: HashMap::new(),
             check_updates_on_startup: true,
+            telemetry_enabled: true,
         }
     }
 }

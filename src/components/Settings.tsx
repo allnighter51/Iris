@@ -497,6 +497,18 @@ export function SettingsView({
                   </div>
                 </div>
               </div>
+
+              <div style={{ marginTop: 16 }}>
+                <SettingsRow
+                  title="Anonymous Live Telemetry"
+                  desc="Sends lightweight, anonymous 10-minute session heartbeats and game engagement to the live Aether Deck dashboard. Zero personal information, usernames, or file paths are ever collected."
+                >
+                  <Toggle
+                    checked={s.telemetryEnabled ?? true}
+                    onChange={(v) => save({ telemetryEnabled: v })}
+                  />
+                </SettingsRow>
+              </div>
             </div>
           )}
 

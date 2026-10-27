@@ -115,6 +115,7 @@ export interface Settings {
   autoGameSwitch?: boolean; autoHideUnfocused?: boolean; gameProfiles?: Record<string, string>;
   startWithWindows: boolean; closeToTray: boolean; hardwareAcceleration: boolean;
   lowResource: boolean; layerHotkeys: Record<string, string>; checkUpdatesOnStartup?: boolean;
+  telemetryEnabled?: boolean;
 }
 
 export type UpdateStatus =

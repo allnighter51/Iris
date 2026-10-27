@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 import { api } from "./api";
 import {
-  DEFAULT_OVERLAY, DEFAULT_TRANSFORM, KNOWN_GAMES,
+  DEFAULT_OVERLAY, DEFAULT_TRANSFORM, ELEMENT_TAGS, KNOWN_GAMES,
   type CanvasRes, type CompositePreset, type Layer, type MonitorInfo,
   type OverlayState, type OverlayStatus, type Settings, type Tab,
   type UpdateStatus, type VaultData, type VaultItem,
@@ -10,6 +11,7 @@ import {
 import { filterItems } from "./util";
 import { fromPreset, newLayer, parsePresetPayload, toScene } from "./layers";
 import { loadUsage, saveUsage, type UsageStats } from "./usage";
+import { sendTelemetryEvent } from "./services/telemetry";
 import { TopBar } from "./components/TopBar";
 import { Vault } from "./components/Vault";
 import { Display } from "./components/Display";
@@ -74,6 +76,10 @@ export default function App() {
   const [layers, setLayers] = useState<Layer[]>([]);
   const [live, setLive] = useState(false);
   const [activePresetId, setActivePresetId] = useState<string | null>(null);
+  const overlayRef = useRef(overlay); overlayRef.current = overlay;
+  const liveRef = useRef(live); liveRef.current = live;
+  const activePresetIdRef = useRef(activePresetId); activePresetIdRef.current = activePresetId;
+  const appVersionRef = useRef("0.1.1");
   const [canvasRes, setCanvasResState] = useState<CanvasRes | null>(() => {
     try { const raw = localStorage.getItem("iris_canvas_res"); return raw ? (JSON.parse(raw) as CanvasRes) : null; }
     catch { return null; }
@@ -118,6 +124,20 @@ export default function App() {
         setMonitors(m);
         if (u) setUpdateStatus(u);
         setReady(true);
+        getVersion().then((ver) => {
+          appVersionRef.current = ver;
+          sendTelemetryEvent({
+            event: "app_launch",
+            appVersion: ver,
+            resolution: `${window.screen.width}x${window.screen.height}`,
+          }, s?.telemetryEnabled ?? true);
+        }).catch(() => {
+          sendTelemetryEvent({
+            event: "app_launch",
+            appVersion: "0.1.1",
+            resolution: `${window.screen.width}x${window.screen.height}`,
+          }, s?.telemetryEnabled ?? true);
+        });
       })
       .catch(() => setReady(true));
 
@@ -149,6 +169,42 @@ export default function App() {
   }, [updateUsage]);
 
   useEffect(() => {
+    if (!ready || (settings && settings.telemetryEnabled === false)) return;
+
+    const runHeartbeat = () => {
+      const v = vaultRef.current;
+      const curOverlay = overlayRef.current;
+      const isLive = liveRef.current;
+      let gameCategory: string | null = null;
+      let elementType: string | null = null;
+
+      if (curOverlay.enabled && v) {
+        if (isLive) {
+          const preset = v.presets.find((p) => p.id === activePresetIdRef.current);
+          gameCategory = preset?.game ?? "Custom";
+          elementType = "Full HUD";
+        } else if (curOverlay.itemId) {
+          const item = v.items.find((i) => i.id === curOverlay.itemId);
+          if (item) {
+            gameCategory = item.game;
+            elementType = ELEMENT_TAGS.find((t) => t.id === item.tag)?.label ?? item.tag ?? "Overlay";
+          }
+        }
+      }
+
+      sendTelemetryEvent({
+        event: "heartbeat",
+        appVersion: appVersionRef.current,
+        gameCategory,
+        elementType,
+      }, settingsRef.current?.telemetryEnabled ?? true);
+    };
+
+    const timer = setInterval(runHeartbeat, 600_000);
+    return () => clearInterval(timer);
+  }, [ready, settings?.telemetryEnabled]);
+
+  useEffect(() => {
     if (!ready || !vault) return;
     const m = monitors[overlay.monitor] ?? monitors[0];
     const factor = canvasRes && m ? Math.min(m.width / canvasRes.w, m.height / canvasRes.h) : 1;
@@ -177,6 +233,12 @@ export default function App() {
       width: item.width, height: item.height, transform: item.transform ?? DEFAULT_TRANSFORM,
     }));
     if (goToDisplay) setTab("display");
+    sendTelemetryEvent({
+      event: "overlay_equipped",
+      appVersion: appVersionRef.current,
+      gameCategory: item.game,
+      elementType: ELEMENT_TAGS.find((t) => t.id === item.tag)?.label ?? item.tag ?? "Overlay",
+    }, settingsRef.current?.telemetryEnabled ?? true);
   }, [vault, recordSwap]);
 
   const addLayer = useCallback((item: VaultItem, at?: { x: number; y: number }) => {
@@ -194,6 +256,12 @@ export default function App() {
     if (p.refW && p.refH) setCanvasRes({ w: p.refW, h: p.refH });
     if (pushLive) { setLive(true); setOverlay((o) => ({ ...o, enabled: true })); }
     if (goToLayering) setTab("layering");
+    sendTelemetryEvent({
+      event: "overlay_equipped",
+      appVersion: appVersionRef.current,
+      gameCategory: p.game ?? "Custom",
+      elementType: "Full HUD",
+    }, settingsRef.current?.telemetryEnabled ?? true);
   }, [recordSwap, setCanvasRes]);
 
   const pushComposite = useCallback(() => {
@@ -201,6 +269,13 @@ export default function App() {
     setLive(true);
     setOverlay((o) => ({ ...o, enabled: true }));
     if (settingsRef.current?.targetMode === "game" && !status.gameRunning) saveSettings({ targetMode: "topmost" });
+    const p = vaultRef.current?.presets.find((x) => x.id === activePresetId);
+    sendTelemetryEvent({
+      event: "overlay_equipped",
+      appVersion: appVersionRef.current,
+      gameCategory: p?.game ?? "Custom",
+      elementType: "Full HUD",
+    }, settingsRef.current?.telemetryEnabled ?? true);
   }, [activePresetId, recordSwap, status.gameRunning, saveSettings]);
 
   useEffect(() => {
