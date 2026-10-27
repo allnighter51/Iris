@@ -56,8 +56,41 @@ export default function App() {
   const [usageStats, setUsageStats] = useState<UsageStats>(() => usageStatsRef.current);
   const lastActiveOverlayIdRef = useRef<string | null>(null);
 
+  const [telemetryPaused, setTelemetryPaused] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("iris_telemetry_paused") === "true";
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleTelemetry = useCallback(() => {
+    setTelemetryPaused((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("iris_telemetry_paused", String(next));
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
+
+  const resetUsageStats = useCallback(() => {
+    const v = vaultRef.current;
+    const resetStats: UsageStats = {
+      totalAppTimeSeconds: 0,
+      totalSwaps: 0,
+      totalUploads: v?.items.length ?? 0,
+      overlayTime: {},
+    };
+    usageStatsRef.current = resetStats;
+    saveUsage(resetStats);
+    setUsageStats(resetStats);
+  }, []);
+
   const recordSwap = useCallback((newId: string | null) => {
-    if (!newId) return;
+    if (!newId || telemetryPaused) return;
     if (lastActiveOverlayIdRef.current && lastActiveOverlayIdRef.current !== newId) {
       const next: UsageStats = {
         ...usageStatsRef.current,
@@ -68,9 +101,10 @@ export default function App() {
       setUsageStats(next);
     }
     lastActiveOverlayIdRef.current = newId;
-  }, []);
+  }, [telemetryPaused]);
 
   const recordUpload = useCallback(() => {
+    if (telemetryPaused) return;
     const next: UsageStats = {
       ...usageStatsRef.current,
       totalUploads: usageStatsRef.current.totalUploads + 1,
@@ -78,7 +112,7 @@ export default function App() {
     usageStatsRef.current = next;
     saveUsage(next);
     setUsageStats(next);
-  }, []);
+  }, [telemetryPaused]);
 
   // Layering studio state (kept here so Vault actions and tab switches preserve it)
   const [layers, setLayers] = useState<Layer[]>([]);
@@ -105,6 +139,7 @@ export default function App() {
 
   // Live app and active overlay telemetry timer
   useEffect(() => {
+    if (telemetryPaused) return;
     const timer = setInterval(() => {
       const cur = usageStatsRef.current;
       const nextAppTime = cur.totalAppTimeSeconds + 1;
@@ -137,7 +172,7 @@ export default function App() {
       clearInterval(timer);
       saveUsage(usageStatsRef.current);
     };
-  }, [overlay.enabled, overlay.itemId, live, activePresetId, tab]);
+  }, [overlay.enabled, overlay.itemId, live, activePresetId, tab, telemetryPaused]);
 
   useEffect(() => {
     if (tab === "settings") {
@@ -574,6 +609,23 @@ export default function App() {
             vault={vault}
             usageStats={usageStats}
             activeOverlayItemId={overlay.itemId}
+            isTelemetryPaused={telemetryPaused}
+            onToggleTelemetry={toggleTelemetry}
+            onResetTelemetry={resetUsageStats}
+            onEquipItem={(item) => {
+              loadItem(item, true);
+              setToast({
+                title: "● Overlay Equipped",
+                sub: `Equipped "${item.name}" to display`,
+              });
+            }}
+            onEquipPreset={(p) => {
+              loadPreset(p, true, true);
+              setToast({
+                title: "● Loadout Equipped",
+                sub: `Equipped loadout "${p.name}"`,
+              });
+            }}
             updateStatus={updateStatus}
             onCheckUpdate={handleCheckUpdate}
             onDownloadUpdate={handleDownloadUpdate}

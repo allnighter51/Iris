@@ -1,4 +1,4 @@
-import type { VaultData } from "./types";
+import type { CompositePreset, VaultData, VaultItem } from "./types";
 
 export interface UsageStats {
   totalAppTimeSeconds: number;
@@ -69,6 +69,10 @@ export interface FavOverlayInfo {
   timeSeconds: number;
   sub: string;
   isStarred: boolean;
+  item?: VaultItem | null;
+  preset?: CompositePreset | null;
+  tag?: string | null;
+  isRecentFallback?: boolean;
 }
 
 export function computeFavoriteOverlay(
@@ -83,6 +87,10 @@ export function computeFavoriteOverlay(
       timeSeconds: 0,
       sub: "No overlays uploaded",
       isStarred: false,
+      item: null,
+      preset: null,
+      tag: null,
+      isRecentFallback: false,
     };
   }
 
@@ -91,6 +99,9 @@ export function computeFavoriteOverlay(
   let bestName = "";
   let bestSub = "";
   let isStarred = false;
+  let bestItem: VaultItem | null = null;
+  let bestPreset: CompositePreset | null = null;
+  let bestTag: string | null = null;
 
   // 1. Scan single vault items
   for (const item of vault.items) {
@@ -100,6 +111,9 @@ export function computeFavoriteOverlay(
       bestName = item.name;
       bestSub = item.game;
       isStarred = !!item.favorite;
+      bestItem = item;
+      bestPreset = null;
+      bestTag = item.tag ?? null;
     }
   }
 
@@ -111,11 +125,17 @@ export function computeFavoriteOverlay(
       bestName = `Loadout: ${p.name}`;
       bestSub = p.game || "Composite Stack";
       isStarred = true;
+      bestPreset = p;
+      bestItem = null;
+      bestTag = "stack";
     }
   }
 
+  let isRecentFallback = false;
+
   // 3. Fallback to starred item, active item, or first item if no item has accumulated time yet
   if (bestTime === 0) {
+    isRecentFallback = true;
     const starred = vault.items.find((i) => i.favorite);
     const active = activeItemId ? vault.items.find((i) => i.id === activeItemId) : null;
     const fallback = starred || active || vault.items[0];
@@ -125,11 +145,17 @@ export function computeFavoriteOverlay(
       bestSub = fallback.game;
       bestTime = times[fallback.id] ?? 0;
       isStarred = !!fallback.favorite;
+      bestItem = fallback;
+      bestPreset = null;
+      bestTag = fallback.tag ?? null;
     } else if (vault.presets.length > 0) {
       bestName = `Loadout: ${vault.presets[0].name}`;
       bestSub = vault.presets[0].game || "Composite Stack";
       bestTime = times[`preset:${vault.presets[0].id}`] ?? 0;
       isStarred = true;
+      bestPreset = vault.presets[0];
+      bestItem = null;
+      bestTag = "stack";
     }
   }
 
@@ -139,5 +165,9 @@ export function computeFavoriteOverlay(
     timeSeconds: bestTime,
     sub: bestSub,
     isStarred,
+    item: bestItem,
+    preset: bestPreset,
+    tag: bestTag,
+    isRecentFallback,
   };
 }

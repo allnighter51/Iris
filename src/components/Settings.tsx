@@ -1,7 +1,19 @@
-import { useEffect, useState } from "react";
-import { api } from "../api";
-import { GAME_EXES, KNOWN_GAMES, ROLES, type Settings, type UpdateStatus, type VaultData } from "../types";
+import { useEffect, useMemo, useState } from "react";
+import { api, assetUrl } from "../api";
+import {
+  ELEMENT_TAGS,
+  GAME_EXES,
+  KNOWN_GAMES,
+  ROLES,
+  type CompositePreset,
+  type Settings,
+  type UpdateStatus,
+  type VaultData,
+  type VaultItem,
+} from "../types";
 import { computeFavoriteOverlay, formatDuration, type UsageStats } from "../usage";
+import { gameClass } from "../util";
+import { StackThumb } from "./SceneView";
 import { Toggle } from "./ui";
 
 function keyName(e: KeyboardEvent): string | null {
@@ -62,6 +74,11 @@ export function SettingsView({
   vault,
   usageStats,
   activeOverlayItemId,
+  isTelemetryPaused,
+  onToggleTelemetry,
+  onResetTelemetry,
+  onEquipItem,
+  onEquipPreset,
   updateStatus = { status: "idle" },
   onCheckUpdate,
   onDownloadUpdate,
@@ -73,6 +90,11 @@ export function SettingsView({
   vault?: VaultData | null;
   usageStats?: UsageStats;
   activeOverlayItemId?: string | null;
+  isTelemetryPaused?: boolean;
+  onToggleTelemetry?: () => void;
+  onResetTelemetry?: () => void;
+  onEquipItem?: (item: VaultItem) => void;
+  onEquipPreset?: (preset: CompositePreset) => void;
   updateStatus?: UpdateStatus;
   onCheckUpdate?: () => void;
   onDownloadUpdate?: () => void;
@@ -80,6 +102,7 @@ export function SettingsView({
 }) {
   const [exe, setExe] = useState(s.targetExe);
   const [needsRestart, setNeedsRestart] = useState(false);
+  const [confirmReset, setConfirmReset] = useState(false);
 
   const isGameActive = !!currentForegroundExe && KNOWN_GAMES.some((g) =>
     g.exes.some((e) => e.toLowerCase() === currentForegroundExe.toLowerCase())
@@ -87,6 +110,96 @@ export function SettingsView({
 
   const favOverlay = computeFavoriteOverlay(vault, usageStats, activeOverlayItemId);
   const effectiveUploads = Math.max(usageStats?.totalUploads ?? 0, vault?.items.length ?? 0);
+  const vaultItemCount = vault?.items.length ?? 0;
+  const estimatedSizeMB = vault && vault.items.length > 0
+    ? (vault.items.reduce((acc, it) => acc + (it.width * it.height * 0.4) / (1024 * 1024), 0)).toFixed(1)
+    : "0";
+
+  const handleResetClick = () => {
+    if (!confirmReset) {
+      setConfirmReset(true);
+      setTimeout(() => setConfirmReset(false), 3500);
+    } else {
+      setConfirmReset(false);
+      onResetTelemetry?.();
+    }
+  };
+
+  const gameBreakdown = useMemo(() => {
+    if (!vault) return { segments: [] as Array<{ game: string; percent: number; detail: string; color: string }>, modeLabel: "no data" };
+
+    const times = usageStats?.overlayTime ?? {};
+    const gameTimes: Record<string, number> = {};
+    let totalTime = 0;
+
+    for (const it of vault.items) {
+      const t = times[it.id] ?? 0;
+      const g = it.game || "Other";
+      if (t > 0) {
+        gameTimes[g] = (gameTimes[g] || 0) + t;
+        totalTime += t;
+      }
+    }
+
+    for (const p of vault.presets) {
+      const t = times[`preset:${p.id}`] ?? times[p.id] ?? 0;
+      const g = p.game || "Other";
+      if (t > 0) {
+        gameTimes[g] = (gameTimes[g] || 0) + t;
+        totalTime += t;
+      }
+    }
+
+    const GAME_COLORS: Record<string, string> = {
+      Overwatch: "#38bdf8",
+      Valorant: "#f43f5e",
+      "Marvel Rivals": "#a855f7",
+      "Call of Duty": "#eab308",
+      Fortnite: "#10b981",
+      "Apex Legends": "#fb923c",
+      "Dead by Daylight": "#64748b",
+      Other: "#06b6d4",
+    };
+    const PALETTE = ["#38bdf8", "#a855f7", "#f43f5e", "#10b981", "#eab308", "#fb923c", "#06b6d4", "#64748b"];
+
+    if (totalTime > 0) {
+      const sorted = Object.entries(gameTimes).sort((a, b) => b[1] - a[1]);
+      const segments = sorted.map(([game, sec], i) => ({
+        game,
+        percent: Math.max(1, Math.round((sec / totalTime) * 100)),
+        detail: formatDuration(sec),
+        color: GAME_COLORS[game] || PALETTE[i % PALETTE.length],
+      }));
+      return { segments, modeLabel: "by active time" };
+    }
+
+    // Fallback to library distribution by game
+    const gameCounts: Record<string, number> = {};
+    let totalCount = 0;
+    for (const it of vault.items) {
+      const g = it.game || "Other";
+      gameCounts[g] = (gameCounts[g] || 0) + 1;
+      totalCount++;
+    }
+    for (const p of vault.presets) {
+      const g = p.game || "Other";
+      gameCounts[g] = (gameCounts[g] || 0) + 1;
+      totalCount++;
+    }
+
+    if (totalCount > 0) {
+      const sorted = Object.entries(gameCounts).sort((a, b) => b[1] - a[1]);
+      const segments = sorted.map(([game, count], i) => ({
+        game,
+        percent: Math.max(1, Math.round((count / totalCount) * 100)),
+        detail: `${count} ${count === 1 ? "overlay" : "overlays"}`,
+        color: GAME_COLORS[game] || PALETTE[i % PALETTE.length],
+      }));
+      return { segments, modeLabel: "by library distribution" };
+    }
+
+    return { segments: [], modeLabel: "no activity" };
+  }, [vault, usageStats]);
 
   return (
     <div className="page settings">
@@ -245,86 +358,181 @@ export function SettingsView({
       </section>
 
       {/* 5. Iris Usage & Activity */}
-      <section className="card bracket">
+      <section className="card bracket telemetry-section">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <h3 style={{ margin: 0 }}>Iris Usage &amp; Activity</h3>
-          <span className="tag mono ok">● TRACKING ACTIVE</span>
+          <div className="telemetry-header-controls">
+            <button
+              type="button"
+              className={`telemetry-status-pill ${!isTelemetryPaused ? "live" : "paused"}`}
+              onClick={() => onToggleTelemetry?.()}
+              title={!isTelemetryPaused ? "Click to pause telemetry tracking" : "Click to resume telemetry tracking"}
+            >
+              <span className="telemetry-pulse-dot" />
+              {!isTelemetryPaused ? "TRACKING ACTIVE" : "TRACKING PAUSED"}
+            </button>
+            <button
+              type="button"
+              className={`btn small ${confirmReset ? "danger" : "outline"} telemetry-reset-btn`}
+              onClick={handleResetClick}
+              title={confirmReset ? "Click again to confirm resetting all usage telemetry" : "Reset session and usage counters"}
+            >
+              {confirmReset ? "Confirm Reset?" : "↺ Reset"}
+            </button>
+          </div>
         </div>
         <div className="muted small" style={{ marginBottom: 14 }}>
           Live overlay and session telemetry tracking your Iris usage across games and presets.
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))",
-            gap: 12,
-          }}
-        >
-          {/* 1) Favorite overlay, with time spent using it */}
-          <div className="card bracket" style={{ padding: "14px 16px", background: "#0c0d17" }}>
-            <div className="mono muted small" style={{ letterSpacing: "0.08em", marginBottom: 6 }}>
-              FAVORITE OVERLAY
-            </div>
-            <div
-              style={{
-                fontSize: 16,
-                fontWeight: 700,
-                color: "var(--cyan)",
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-              title={favOverlay.name}
-            >
-              {favOverlay.name}
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-              <span className="tag mono" style={{ color: "var(--cyan)", borderColor: "rgba(6, 182, 212, 0.4)" }}>
-                ⏱ {favOverlay.timeFormatted}
-              </span>
-              {favOverlay.sub && (
-                <span className="mono muted small">{favOverlay.sub}</span>
+        {/* Bento 2-Column Grid */}
+        <div className="telemetry-bento-grid">
+          {/* Left Column: Top Equipped Overlay Hero Card */}
+          <div className="bento-cell telemetry-hero-card">
+            <div className="telemetry-hero-head">
+              <span className="bento-label">TOP EQUIPPED OVERLAY</span>
+              {favOverlay.isStarred && (
+                <span className="telemetry-badge star" style={{ color: "#fbbf24", background: "rgba(251, 191, 36, 0.12)", border: "1px solid rgba(251, 191, 36, 0.35)" }}>
+                  ★ FAVORITE
+                </span>
               )}
             </div>
+
+            {favOverlay.item && vault ? (
+              <div className="telemetry-hero-thumb">
+                <div className="telemetry-hero-glow" />
+                <img
+                  src={assetUrl(favOverlay.item.thumb ? vault.thumbsDir : vault.assetsDir, favOverlay.item.thumb ?? favOverlay.item.file)}
+                  alt={favOverlay.item.name}
+                  className="telemetry-hero-img"
+                />
+                <div className="telemetry-equip-overlay">
+                  <button
+                    type="button"
+                    className="btn small primary telemetry-equip-btn"
+                    onClick={() => onEquipItem?.(favOverlay.item!)}
+                  >
+                    ⚡ Equip Now
+                  </button>
+                </div>
+              </div>
+            ) : favOverlay.preset && vault ? (
+              <div className="telemetry-hero-thumb">
+                <div className="telemetry-hero-glow" />
+                <div style={{ width: "85%", height: "85%", position: "relative", zIndex: 1 }}>
+                  <StackThumb
+                    layers={favOverlay.preset.layers}
+                    vault={vault}
+                    refW={favOverlay.preset.refW}
+                    refH={favOverlay.preset.refH}
+                  />
+                </div>
+                <div className="telemetry-equip-overlay">
+                  <button
+                    type="button"
+                    className="btn small primary telemetry-equip-btn"
+                    onClick={() => onEquipPreset?.(favOverlay.preset!)}
+                  >
+                    ⚡ Equip Now
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="telemetry-hero-thumb empty">
+                <div className="muted small" style={{ textAlign: "center", padding: 16 }}>
+                  No overlays in Vault
+                </div>
+              </div>
+            )}
+
+            <div className="telemetry-hero-details">
+              <div className="telemetry-hero-name-row">
+                <div className="telemetry-hero-name" title={favOverlay.name}>
+                  {favOverlay.name}
+                </div>
+                {favOverlay.isRecentFallback || favOverlay.timeSeconds === 0 ? (
+                  <span className="telemetry-badge recent">Recently Added</span>
+                ) : (
+                  <span className="telemetry-badge active-time">⏱ {favOverlay.timeFormatted}</span>
+                )}
+              </div>
+              <div className="telemetry-hero-meta">
+                {favOverlay.sub && (
+                  <span className={`tag mono ${gameClass(favOverlay.sub)}`}>
+                    {favOverlay.sub}
+                  </span>
+                )}
+                {favOverlay.tag && (
+                  <span className="tag mono">
+                    {ELEMENT_TAGS.find((t) => t.id === favOverlay.tag)?.label || favOverlay.tag}
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
 
-          {/* 2) Total overlays uploaded */}
-          <div className="card bracket" style={{ padding: "14px 16px", background: "#0c0d17" }}>
-            <div className="mono muted small" style={{ letterSpacing: "0.08em", marginBottom: 6 }}>
-              TOTAL OVERLAYS UPLOADED
-            </div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: "var(--emerald)", fontFamily: "var(--mono)" }}>
-              {effectiveUploads}
-            </div>
-            <div className="muted small" style={{ marginTop: 4 }}>
-              Overlays in Vault library
-            </div>
-          </div>
+          {/* Right Column: Unified Telemetry Strip + Game Distribution Bar */}
+          <div className="telemetry-right-col">
+            {/* Top Row: 3 Compact Stat Cells */}
+            <div className="telemetry-stat-strip">
+              {/* 1. Vault Library */}
+              <div className="bento-cell telemetry-stat-cell">
+                <div className="bento-label">VAULT LIBRARY</div>
+                <div className="bento-value">{effectiveUploads}</div>
+                <div className="bento-sub">
+                  {vaultItemCount} {vaultItemCount === 1 ? "overlay" : "overlays"}
+                  {estimatedSizeMB && estimatedSizeMB !== "0" ? ` · ~${estimatedSizeMB} MB` : ""}
+                </div>
+              </div>
 
-          {/* 3) Times swapped between overlays */}
-          <div className="card bracket" style={{ padding: "14px 16px", background: "#0c0d17" }}>
-            <div className="mono muted small" style={{ letterSpacing: "0.08em", marginBottom: 6 }}>
-              OVERLAYS SWAPPED
-            </div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: "var(--purple)", fontFamily: "var(--mono)" }}>
-              {usageStats?.totalSwaps ?? 0}
-            </div>
-            <div className="muted small" style={{ marginTop: 4 }}>
-              Overlay switches &amp; cyclers
-            </div>
-          </div>
+              {/* 2. Overlays Swapped */}
+              <div className="bento-cell telemetry-stat-cell">
+                <div className="bento-label">OVERLAYS SWAPPED</div>
+                <div className="bento-value">{usageStats?.totalSwaps ?? 0}</div>
+                <div className="bento-sub">Switches &amp; cyclers</div>
+              </div>
 
-          {/* 4) Total time spent in the app */}
-          <div className="card bracket" style={{ padding: "14px 16px", background: "#0c0d17" }}>
-            <div className="mono muted small" style={{ letterSpacing: "0.08em", marginBottom: 6 }}>
-              TOTAL TIME IN APP
+              {/* 3. Active HUD Time */}
+              <div className="bento-cell telemetry-stat-cell">
+                <div className="bento-label">ACTIVE HUD TIME</div>
+                <div className="bento-value">{formatDuration(usageStats?.totalAppTimeSeconds ?? 0)}</div>
+                <div className="bento-sub">Lifetime Iris usage</div>
+              </div>
             </div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: "var(--pink)", fontFamily: "var(--mono)" }}>
-              {formatDuration(usageStats?.totalAppTimeSeconds ?? 0)}
-            </div>
-            <div className="muted small" style={{ marginTop: 4 }}>
-              Lifetime Iris usage
+
+            {/* Bottom Row: Game Activity Breakdown Bar */}
+            <div className="bento-cell telemetry-breakdown-card">
+              <div className="telemetry-breakdown-head">
+                <span className="bento-label">GAME ACTIVITY BREAKDOWN</span>
+                <span className="mono muted small">{gameBreakdown.modeLabel}</span>
+              </div>
+
+              <div className="telemetry-progress-track">
+                {gameBreakdown.segments.map((seg) => (
+                  <div
+                    key={seg.game}
+                    className="telemetry-segment"
+                    style={{ width: `${seg.percent}%`, backgroundColor: seg.color }}
+                    title={`${seg.game}: ${seg.percent}% (${seg.detail})`}
+                  />
+                ))}
+                {gameBreakdown.segments.length === 0 && (
+                  <div className="telemetry-segment-empty" style={{ width: "100%" }} />
+                )}
+              </div>
+
+              <div className="telemetry-legend">
+                {gameBreakdown.segments.map((seg) => (
+                  <div key={seg.game} className="telemetry-legend-item">
+                    <span className="telemetry-dot" style={{ backgroundColor: seg.color }} />
+                    <span className="telemetry-legend-name">{seg.game}</span>
+                    <span className="telemetry-legend-pct mono">{seg.percent}%</span>
+                  </div>
+                ))}
+                {gameBreakdown.segments.length === 0 && (
+                  <span className="muted small">No game activity recorded yet</span>
+                )}
+              </div>
             </div>
           </div>
         </div>
