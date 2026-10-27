@@ -1,5 +1,5 @@
 //! Overlay window lifecycle: a single frameless, transparent, click-through
-//! window per app that only renders the active PNG.
+//! window per app that renders the active HUD or composite scene.
 
 use crate::{model::*, win32};
 use serde::Serialize;
@@ -26,7 +26,6 @@ pub struct OverlayStatus {
     pub game_running: bool,
 }
 
-/// Must be called on the main thread (setup). The window starts hidden.
 pub fn create_window(app: &AppHandle) -> tauri::Result<()> {
     let win = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("overlay.html".into()))
         .title("Iris Overlay")
@@ -57,31 +56,52 @@ fn monitor_rect(app: &AppHandle, idx: usize) -> (i32, i32, i32, i32) {
     }
 }
 
-/// Recompute visibility/placement from stored state and push to both windows.
-pub fn refresh(app: &AppHandle) {
-    let st = app.state::<AppState>();
-    let o = st.overlay.lock().unwrap().clone();
-    let s = st.settings.lock().unwrap().clone();
+fn build_payload(app: &AppHandle, st: &AppState) -> (OverlayPayload, (i32, i32, i32, i32), bool, bool) {
+    let o = st.overlay().clone();
+    let s = st.settings().clone();
     let game = st.game_running.load(Ordering::Relaxed);
-    let (mx, my, mw, mh) = monitor_rect(app, o.monitor);
+    let rect = monitor_rect(app, o.monitor);
     let visible = o.enabled && o.has_content() && (s.target_mode != "game" || game);
-
-    if let Some(win) = app.get_webview_window(LABEL) {
-        place_and_show(&win, &st, (mx, my, mw, mh), visible, s.hide_from_capture);
-    }
-    let _ = app.emit_to(
-        LABEL,
-        "overlay-state",
-        OverlayPayload { state: o.clone(), visible, monitor_w: mw, monitor_h: mh, low_res: s.low_resource },
-    );
-    let _ = app.emit_to("main", "overlay-status", OverlayStatus { enabled: o.enabled, visible, game_running: game });
+    let payload = OverlayPayload {
+        state: o,
+        visible,
+        monitor_w: rect.2,
+        monitor_h: rect.3,
+        low_res: s.low_resource,
+    };
+    (payload, rect, game, s.hide_from_capture)
 }
 
-fn place_and_show(win: &WebviewWindow, st: &AppState, rect: (i32, i32, i32, i32), visible: bool, excl: bool) {
+pub fn refresh(app: &AppHandle) {
+    let st = app.state::<AppState>();
+    let (payload, rect, game, hide_from_capture) = build_payload(app, &st);
+
+    if let Some(win) = app.get_webview_window(LABEL) {
+        place_and_show(&win, &st, rect, payload.visible, hide_from_capture);
+    }
+    let _ = app.emit_to(
+        "main",
+        "overlay-status",
+        OverlayStatus {
+            enabled: payload.state.enabled,
+            visible: payload.visible,
+            game_running: game,
+        },
+    );
+    let _ = app.emit_to(LABEL, "overlay-state", payload);
+}
+
+fn place_and_show(
+    win: &WebviewWindow,
+    st: &AppState,
+    rect: (i32, i32, i32, i32),
+    visible: bool,
+    excl: bool,
+) {
     let Ok(h) = win.hwnd() else { return };
     let raw = h.0 as isize;
     {
-        let mut last = st.last_rect.lock().unwrap();
+        let mut last = st.last_rect();
         if *last != Some(rect) {
             win32::place(raw, rect.0, rect.1, rect.2, rect.3);
             *last = Some(rect);
@@ -98,24 +118,26 @@ fn place_and_show(win: &WebviewWindow, st: &AppState, rect: (i32, i32, i32, i32)
 pub fn toggle(app: &AppHandle) {
     {
         let st = app.state::<AppState>();
-        let mut o = st.overlay.lock().unwrap();
+        let mut o = st.overlay();
         o.enabled = !o.enabled;
     }
     refresh(app);
 }
 
 #[tauri::command]
-pub fn overlay_apply(app: AppHandle, state: State<AppState>, overlay: OverlayState) {
-    *state.overlay.lock().unwrap() = overlay;
+pub fn overlay_apply(app: AppHandle, state: State<AppState>, mut overlay: OverlayState) {
+    if let Some(ref p) = overlay.path {
+        if !state.is_valid_asset_path(p) {
+            overlay.path = None;
+        }
+    }
+    overlay.scene.retain(|l| state.is_valid_asset_path(&l.path));
+    overlay.scene.truncate(64);
+    *state.overlay() = overlay;
     refresh(&app);
 }
 
 #[tauri::command]
 pub fn overlay_get(app: AppHandle, state: State<AppState>) -> OverlayPayload {
-    let o = state.overlay.lock().unwrap().clone();
-    let s = state.settings.lock().unwrap().clone();
-    let (_, _, mw, mh) = monitor_rect(&app, o.monitor);
-    let game = state.game_running.load(Ordering::Relaxed);
-    let visible = o.enabled && o.has_content() && (s.target_mode != "game" || game);
-    OverlayPayload { state: o, visible, monitor_w: mw, monitor_h: mh, low_res: s.low_resource }
+    build_payload(&app, &state).0
 }

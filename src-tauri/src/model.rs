@@ -7,19 +7,18 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64},
-        Mutex,
+        Mutex, MutexGuard,
     },
 };
 
 pub const IDENTIFIER: &str = "art.veevisuals.iris";
+pub const KNOWN_ROLES: &[&str] = &["base", "ult", "map", "ability", "crosshair", "custom"];
 
-/// `%APPDATA%\art.veevisuals.iris` - identical to Tauri's `app_data_dir`, but
-/// resolvable before the app is built (needed for early WebView2 flags).
 pub fn default_root() -> PathBuf {
-    let base = std::env::var_os("APPDATA")
+    std::env::var_os("APPDATA")
         .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    base.join(IDENTIFIER)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(IDENTIFIER)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -27,19 +26,12 @@ pub fn default_root() -> PathBuf {
 pub struct Transform {
     pub x: f64,
     pub y: f64,
-    /// percent, 100 = native pixel match
     pub scale: f64,
-    /// percent
     pub opacity: f64,
-    /// degrees
     pub hue: f64,
-    /// percent
     pub brightness: f64,
-    /// percent
     pub contrast: f64,
-    /// continuous animated rainbow hue-shift
     pub chroma_cycle: bool,
-    /// cycle duration in seconds (e.g. 6.0)
     pub chroma_speed: f64,
 }
 
@@ -72,23 +64,19 @@ pub struct VaultItem {
     pub height: u32,
     pub created_at: u64,
     pub transform: Option<Transform>,
-    /// element tag: "ult" | "map" | "health" | "hud" | "reticle"
     #[serde(default)]
     pub tag: Option<String>,
     #[serde(default)]
     pub favorite: bool,
 }
 
-/// One modular element inside a composite stack.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PresetLayer {
     pub id: String,
     pub vault_item_id: String,
     pub name: String,
-    /// "base" | "ult" | "map" | "ability" | "crosshair" | "custom"
     pub role: String,
-    /// higher = rendered in front
     pub z_index: i32,
     pub visible: bool,
     pub locked: bool,
@@ -97,13 +85,10 @@ pub struct PresetLayer {
     pub scale: f64,
     pub opacity: f64,
     pub hue: f64,
-    /// non-destructive crop / flip / blend / link-group
     #[serde(default)]
     pub fx: LayerFx,
 }
 
-/// Non-destructive "Photoshop-style" layer effects.
-/// Crop values are percentages of the source image trimmed from each edge.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct LayerFx {
@@ -113,13 +98,10 @@ pub struct LayerFx {
     pub crop_l: f64,
     pub flip_x: bool,
     pub flip_y: bool,
-    /// "" / "normal" | "screen" | "color-dodge" | "overlay" | "soft-light" | "lighten" | "multiply"
     pub blend: String,
-    /// layers sharing a group id move together
     pub group: Option<String>,
 }
 
-/// A saved multi-layer "Loadout".
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct CompositePreset {
@@ -127,15 +109,12 @@ pub struct CompositePreset {
     pub name: String,
     pub game: Option<String>,
     pub layers: Vec<PresetLayer>,
-    /// monitor size the stack was authored on (thumbnail aspect)
     pub ref_w: u32,
     pub ref_h: u32,
-    /// shown in the Vault tab with a STACK badge
     pub in_vault: bool,
     pub created_at: u64,
 }
 
-/// Resolved, ready-to-draw layer pushed to the overlay window.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneLayer {
@@ -168,9 +147,7 @@ pub struct Settings {
     pub hotkey_toggle: String,
     pub hotkey_next: String,
     pub hotkey_prev: String,
-    /// true => WDA_EXCLUDEFROMCAPTURE (invisible to OBS / screenshots)
     pub hide_from_capture: bool,
-    /// "topmost" | "game"
     pub target_mode: String,
     pub target_exe: String,
     pub auto_game_switch: bool,
@@ -180,7 +157,6 @@ pub struct Settings {
     pub close_to_tray: bool,
     pub hardware_acceleration: bool,
     pub low_resource: bool,
-    /// layer role -> global toggle hotkey
     pub layer_hotkeys: HashMap<String, String>,
     pub check_updates_on_startup: bool,
 }
@@ -212,13 +188,11 @@ impl Default for Settings {
 pub struct OverlayState {
     pub enabled: bool,
     pub item_id: Option<String>,
-    /// absolute path of the PNG/WebP in vault_assets
     pub path: Option<String>,
     pub width: u32,
     pub height: u32,
     pub transform: Transform,
     pub monitor: usize,
-    /// when non-empty, the composite stack is drawn instead of `path`
     pub scene: Vec<SceneLayer>,
 }
 
@@ -253,17 +227,50 @@ impl AppState {
             counter: AtomicU64::new(0),
         }
     }
+
+    pub fn manifest(&self) -> MutexGuard<'_, Manifest> {
+        self.manifest.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    pub fn settings(&self) -> MutexGuard<'_, Settings> {
+        self.settings.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    pub fn overlay(&self) -> MutexGuard<'_, OverlayState> {
+        self.overlay.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    pub fn last_rect(&self) -> MutexGuard<'_, Option<(i32, i32, i32, i32)>> {
+        self.last_rect.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn assets_dir(&self) -> PathBuf { self.root.join("vault_assets") }
     pub fn thumbs_dir(&self) -> PathBuf { self.root.join("vault_thumbs") }
     pub fn manifest_path(&self) -> PathBuf { self.root.join("vault_manifest.json") }
     pub fn settings_path(&self) -> PathBuf { self.root.join("settings.json") }
+
+    pub fn is_valid_asset_path(&self, path_str: &str) -> bool {
+        !path_str.is_empty()
+            && !path_str.contains("..")
+            && !path_str.contains('\0')
+            && Path::new(path_str).starts_with(self.assets_dir())
+    }
+}
+
+pub fn is_safe_id(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+pub fn sanitize_text(s: &str, max_len: usize) -> String {
+    s.trim()
+        .chars()
+        .filter(|&c| c != '\0' && c != '/' && c != '\\')
+        .take(max_len)
+        .collect::<String>()
+        .replace("..", "")
 }
 
 pub fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Option<T> {
     serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
 
-/// Write via temp file + rename so a crash never leaves a half-written manifest.
 pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let data = serde_json::to_vec_pretty(value).map_err(|e| e.to_string())?;
     if let Some(parent) = path.parent() {

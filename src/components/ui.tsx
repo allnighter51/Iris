@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { clamp } from "../util";
 
 export function Toggle({
@@ -27,7 +26,6 @@ export function Toggle({
   );
 }
 
-/** Numeric input that commits on change but tolerates partially typed values. */
 export function NumField({
   value,
   onChange,
@@ -43,25 +41,26 @@ export function NumField({
   suffix?: string;
   width?: number;
 }) {
-  const [text, setText] = useState(String(Math.round(value * 10) / 10));
-  useEffect(() => setText(String(Math.round(value * 10) / 10)), [value]);
+  const formatted = String(Math.round(value * 10) / 10);
+  const [draft, setDraft] = useState<string | null>(null);
   const commit = (s: string) => {
+    setDraft(null);
     const n = parseFloat(s);
     if (Number.isFinite(n)) onChange(clamp(n, min, max));
-    else setText(String(value));
   };
   return (
     <span className="numfield" style={{ width }}>
       <input
-        value={text}
+        value={draft ?? formatted}
         inputMode="decimal"
+        onFocus={() => setDraft(formatted)}
         onChange={(e) => {
-          setText(e.target.value);
+          setDraft(e.target.value);
           const n = parseFloat(e.target.value);
           if (Number.isFinite(n) && n >= min && n <= max) onChange(n);
         }}
         onBlur={(e) => commit(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && commit(text)}
+        onKeyDown={(e) => e.key === "Enter" && commit((e.target as HTMLInputElement).value)}
       />
       {suffix && <em>{suffix}</em>}
     </span>
@@ -129,9 +128,7 @@ export function Modal({
       <div className="modal card bracket" style={{ width }} onMouseDown={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <h3>{title}</h3>
-          <button className="icon-btn" onClick={onClose} aria-label="Close">
-            ×
-          </button>
+          <button className="icon-btn" onClick={onClose} aria-label="Close">×</button>
         </div>
         {children}
       </div>

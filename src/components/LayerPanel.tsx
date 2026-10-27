@@ -3,8 +3,22 @@ import { assetUrl } from "../api";
 import { BLEND_MODES, LINK_GROUPS, ROLES, fxOf, type Layer, type LayerFx, type Role, type VaultData } from "../types";
 import { roleBadge } from "../layers";
 import { clamp } from "../util";
-import { CopyIcon, EyeIcon, LockIcon, TrashIcon } from "./icons";
 import { NumField, SliderRow } from "./ui";
+
+const svgProps = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", stroke: "currentColor", strokeWidth: 1.5, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
+const EyeIcon = ({ off }: { off?: boolean }) => <svg {...svgProps}><path d="M1 8s2.6-4.5 7-4.5S15 8 15 8s-2.6 4.5-7 4.5S1 8 1 8z" /><circle cx="8" cy="8" r="2" />{off && <path d="M2 14L14 2" />}</svg>;
+const LockIcon = ({ open }: { open?: boolean }) => <svg {...svgProps}><rect x="3" y="7" width="10" height="7" rx="1.5" /><path d={open ? "M5.5 7V5a2.5 2.5 0 015 0" : "M5 7V5a3 3 0 016 0v2"} /></svg>;
+const CopyIcon = () => <svg {...svgProps}><rect x="5" y="5" width="9" height="9" rx="1.5" /><path d="M11 5V3.5A1.5 1.5 0 009.5 2h-6A1.5 1.5 0 002 3.5v6A1.5 1.5 0 003.5 11H5" /></svg>;
+const TrashIcon = () => <svg {...svgProps}><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.5 7v4M9.5 7v4" /></svg>;
+
+const HUE_SWATCHES = [
+  { label: "Emerald", color: "#10B981", hue: 140 },
+  { label: "Cyan", color: "#06B6D4", hue: 180 },
+  { label: "Purple", color: "#8B5CF6", hue: -95 },
+  { label: "Pink", color: "#EC4899", hue: -35 },
+  { label: "Amber", color: "#F59E0B", hue: 45 },
+  { label: "Red", color: "#EF4444", hue: 0 },
+];
 
 interface Props {
   vault: VaultData;
@@ -19,7 +33,6 @@ interface Props {
   roleHotkeys: Record<string, string>;
 }
 
-/** Right panel: stack manager (top) + selected-layer inspector (bottom). */
 export function LayerPanel({ vault, layers, setLayers, selectedId, select, update, updateFx, duplicate, remove, roleHotkeys }: Props) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<{ id: string; after: boolean } | null>(null);
@@ -51,7 +64,7 @@ export function LayerPanel({ vault, layers, setLayers, selectedId, select, updat
         <div className="rows">
           {layers.map((l, i) => {
             const it = items.get(l.vaultItemId);
-            const z = layers.length - 1 - i;
+            const fx = fxOf(l);
             return (
               <div
                 key={l.id}
@@ -63,10 +76,7 @@ export function LayerPanel({ vault, layers, setLayers, selectedId, select, updat
                   const r = e.currentTarget.getBoundingClientRect();
                   setOverId({ id: l.id, after: e.clientY > r.top + r.height / 2 });
                 }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  drop();
-                }}
+                onDrop={(e) => { e.preventDefault(); drop(); }}
               >
                 <span
                   className="handle"
@@ -79,10 +89,7 @@ export function LayerPanel({ vault, layers, setLayers, selectedId, select, updat
                     setDragId(l.id);
                     select(l.id);
                   }}
-                  onDragEnd={() => {
-                    setDragId(null);
-                    setOverId(null);
-                  }}
+                  onDragEnd={() => { setDragId(null); setOverId(null); }}
                 >
                   ⋮⋮
                 </span>
@@ -99,9 +106,9 @@ export function LayerPanel({ vault, layers, setLayers, selectedId, select, updat
                   <div className="lname-top">{l.name}</div>
                   <div className="lname-sub">
                     <span className={`rbadge r-${l.role}`}>{roleBadge(l.role)}</span>
-                    <span className="mono muted">z{z}</span>
-                    {fxOf(l).group && <span className="rbadge link-badge" title="Linked group — moves together">🔗{fxOf(l).group}</span>}
-                    {(fxOf(l).cropT || fxOf(l).cropR || fxOf(l).cropB || fxOf(l).cropL) ? <span className="mono muted" title="Cropped">✂</span> : null}
+                    <span className="mono muted">z{layers.length - 1 - i}</span>
+                    {fx.group && <span className="rbadge link-badge" title="Linked group — moves together">🔗{fx.group}</span>}
+                    {(fx.cropT || fx.cropR || fx.cropB || fx.cropL) ? <span className="mono muted" title="Cropped">✂</span> : null}
                     {!it && <span className="mono warn">MISSING</span>}
                   </div>
                 </div>
@@ -180,14 +187,7 @@ export function LayerPanel({ vault, layers, setLayers, selectedId, select, updat
               onChange={(v) => update(sel.id, { hue: clamp(v, -180, 180) })}
               extra={
                 <div className="swatches-row">
-                  {[
-                    { label: "Emerald", color: "#10B981", hue: 140 },
-                    { label: "Cyan", color: "#06B6D4", hue: 180 },
-                    { label: "Purple", color: "#8B5CF6", hue: -95 },
-                    { label: "Pink", color: "#EC4899", hue: -35 },
-                    { label: "Amber", color: "#F59E0B", hue: 45 },
-                    { label: "Red", color: "#EF4444", hue: 0 },
-                  ].map((s) => (
+                  {HUE_SWATCHES.map((s) => (
                     <button
                       key={s.color}
                       type="button"
@@ -197,14 +197,7 @@ export function LayerPanel({ vault, layers, setLayers, selectedId, select, updat
                       onClick={() => update(sel.id, { hue: s.hue })}
                     />
                   ))}
-                  <button
-                    type="button"
-                    className="swatch-btn swatch-reset"
-                    title="Reset layer hue"
-                    onClick={() => update(sel.id, { hue: 0 })}
-                  >
-                    Reset
-                  </button>
+                  <button type="button" className="swatch-btn swatch-reset" title="Reset layer hue" onClick={() => update(sel.id, { hue: 0 })}>Reset</button>
                 </div>
               }
             />
@@ -216,16 +209,9 @@ export function LayerPanel({ vault, layers, setLayers, selectedId, select, updat
   );
 }
 
-
-/** Photoshop-style non-destructive tools: blend mode, crop, flip, link group. */
 function FxControls({ layer, updateFx }: { layer: Layer; updateFx: (id: string, p: Partial<LayerFx>) => void }) {
   const fx = fxOf(layer);
-  const crops = [
-    ["cropT", "Top"],
-    ["cropB", "Bottom"],
-    ["cropL", "Left"],
-    ["cropR", "Right"],
-  ] as const;
+  const crops = [["cropT", "Top"], ["cropB", "Bottom"], ["cropL", "Left"], ["cropR", "Right"]] as const;
   const anyCrop = fx.cropT || fx.cropR || fx.cropB || fx.cropL;
   return (
     <>
@@ -246,31 +232,23 @@ function FxControls({ layer, updateFx }: { layer: Layer; updateFx: (id: string, 
           {crops.map(([k, label]) => (
             <div key={k} className="xy">
               <span className="mono muted">{label[0]}</span>
-              <NumField
-                value={fx[k]}
-                min={0}
-                max={95}
-                width={64}
-                onChange={(v) => updateFx(layer.id, { [k]: clamp(v, 0, 95) } as Partial<LayerFx>)}
-              />
+              <NumField value={fx[k]} min={0} max={95} width={64} onChange={(v) => updateFx(layer.id, { [k]: clamp(v, 0, 95) } as Partial<LayerFx>)} />
             </div>
           ))}
         </div>
       </div>
       <div className="field">
-        <div className="field-head">
-          <label>Mirror</label>
-        </div>
+        <div className="field-head"><label>Mirror</label></div>
         <div className="btn-row">
-          <button className={`btn small ${fx.flipX ? "primary" : "outline"}`} onClick={() => updateFx(layer.id, { flipX: !fx.flipX })}>? Flip Horizontal</button>
-          <button className={`btn small ${fx.flipY ? "primary" : "outline"}`} onClick={() => updateFx(layer.id, { flipY: !fx.flipY })}>? Flip Vertical</button>
+          <button className={`btn small ${fx.flipX ? "primary" : "outline"}`} onClick={() => updateFx(layer.id, { flipX: !fx.flipX })}>⇆ Flip Horizontal</button>
+          <button className={`btn small ${fx.flipY ? "primary" : "outline"}`} onClick={() => updateFx(layer.id, { flipY: !fx.flipY })}>⇅ Flip Vertical</button>
         </div>
       </div>
       <div className="field">
         <label>Link Group</label>
         <select className="input full" value={fx.group ?? ""} onChange={(e) => updateFx(layer.id, { group: e.target.value || null })}>
           <option value="">Not linked</option>
-          {LINK_GROUPS.map((g) => <option key={g} value={g}>?? Group {g} � moves together</option>)}
+          {LINK_GROUPS.map((g) => <option key={g} value={g}>🔗 Group {g} — moves together</option>)}
         </select>
       </div>
     </>

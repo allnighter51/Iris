@@ -20,15 +20,12 @@ export function loadUsage(): UsageStats {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { ...DEFAULT_USAGE };
-    const parsed = JSON.parse(raw);
+    const p = JSON.parse(raw);
     return {
-      totalAppTimeSeconds: Number(parsed.totalAppTimeSeconds) || 0,
-      totalSwaps: Number(parsed.totalSwaps) || 0,
-      totalUploads: Number(parsed.totalUploads) || 0,
-      overlayTime:
-        typeof parsed.overlayTime === "object" && parsed.overlayTime !== null
-          ? parsed.overlayTime
-          : {},
+      totalAppTimeSeconds: Number(p.totalAppTimeSeconds) || 0,
+      totalSwaps: Number(p.totalSwaps) || 0,
+      totalUploads: Number(p.totalUploads) || 0,
+      overlayTime: typeof p.overlayTime === "object" && p.overlayTime !== null ? p.overlayTime : {},
     };
   } catch {
     return { ...DEFAULT_USAGE };
@@ -48,18 +45,9 @@ export function formatDuration(seconds: number): string {
   const hrs = Math.floor(seconds / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
   const secs = Math.floor(seconds % 60);
-
-  if (hrs >= 24) {
-    const days = Math.floor(hrs / 24);
-    const remHrs = hrs % 24;
-    return `${days}d ${remHrs}h`;
-  }
-  if (hrs > 0) {
-    return `${hrs}h ${mins}m`;
-  }
-  if (mins > 0) {
-    return `${mins}m ${secs}s`;
-  }
+  if (hrs >= 24) return `${Math.floor(hrs / 24)}d ${hrs % 24}h`;
+  if (hrs > 0) return `${hrs}h ${mins}m`;
+  if (mins > 0) return `${mins}m ${secs}s`;
   return `${secs}s`;
 }
 
@@ -78,7 +66,7 @@ export interface FavOverlayInfo {
 export function computeFavoriteOverlay(
   vault: VaultData | null | undefined,
   usageStats: UsageStats | undefined,
-  activeItemId?: string | null
+  activeItemId?: string | null,
 ): FavOverlayInfo {
   if (!vault || (!vault.items.length && !vault.presets.length)) {
     return {
@@ -103,7 +91,6 @@ export function computeFavoriteOverlay(
   let bestPreset: CompositePreset | null = null;
   let bestTag: string | null = null;
 
-  // 1. Scan single vault items
   for (const item of vault.items) {
     const t = times[item.id] ?? 0;
     if (t > bestTime) {
@@ -117,7 +104,6 @@ export function computeFavoriteOverlay(
     }
   }
 
-  // 2. Scan composite stack presets
   for (const p of vault.presets) {
     const t = times[`preset:${p.id}`] ?? times[p.id] ?? 0;
     if (t > bestTime) {
@@ -132,29 +118,26 @@ export function computeFavoriteOverlay(
   }
 
   let isRecentFallback = false;
-
-  // 3. Fallback to starred item, active item, or first item if no item has accumulated time yet
   if (bestTime === 0) {
     isRecentFallback = true;
-    const starred = vault.items.find((i) => i.favorite);
-    const active = activeItemId ? vault.items.find((i) => i.id === activeItemId) : null;
-    const fallback = starred || active || vault.items[0];
-
+    const fallback =
+      vault.items.find((i) => i.favorite) ||
+      (activeItemId ? vault.items.find((i) => i.id === activeItemId) : null) ||
+      vault.items[0];
     if (fallback) {
       bestName = fallback.name;
       bestSub = fallback.game;
       bestTime = times[fallback.id] ?? 0;
       isStarred = !!fallback.favorite;
       bestItem = fallback;
-      bestPreset = null;
       bestTag = fallback.tag ?? null;
     } else if (vault.presets.length > 0) {
-      bestName = `Loadout: ${vault.presets[0].name}`;
-      bestSub = vault.presets[0].game || "Composite Stack";
-      bestTime = times[`preset:${vault.presets[0].id}`] ?? 0;
+      const p0 = vault.presets[0];
+      bestName = `Loadout: ${p0.name}`;
+      bestSub = p0.game || "Composite Stack";
+      bestTime = times[`preset:${p0.id}`] ?? 0;
       isStarred = true;
-      bestPreset = vault.presets[0];
-      bestItem = null;
+      bestPreset = p0;
       bestTag = "stack";
     }
   }

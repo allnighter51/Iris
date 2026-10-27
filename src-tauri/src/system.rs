@@ -1,93 +1,19 @@
-//! System integration: global hotkeys, tray, autostart, monitors, game watcher.
+//! System integration: global hotkeys, system tray, single-pass game process
+//! watcher, Windows startup registry entry, and monitor enumeration.
 
 use crate::{model::*, overlay, win32};
 use serde::Serialize;
-use std::{os::windows::process::CommandExt, sync::atomic::Ordering, time::Duration};
+use std::{
+    os::windows::process::CommandExt,
+    sync::atomic::Ordering,
+    time::Duration,
+};
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, State,
 };
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-
-#[derive(Clone)]
-enum Action {
-    Toggle,
-    Next,
-    Prev,
-    /// toggle every layer with this role in the Layering stack
-    Role(String),
-}
-
-fn handle(app: &AppHandle, action: Action) {
-    match action {
-        Action::Toggle => overlay::toggle(app),
-        Action::Next => {
-            let _ = app.emit_to("main", "cycle-overlay", 1);
-        }
-        Action::Prev => {
-            let _ = app.emit_to("main", "cycle-overlay", -1);
-        }
-        Action::Role(role) => {
-            let _ = app.emit_to("main", "toggle-layer-role", role);
-        }
-    }
-}
-
-pub fn register_hotkeys(app: &AppHandle) {
-    let gs = app.global_shortcut();
-    let _ = gs.unregister_all();
-    let s = app.state::<AppState>().settings.lock().unwrap().clone();
-    let mut binds = vec![
-        (s.hotkey_toggle, Action::Toggle),
-        (s.hotkey_next, Action::Next),
-        (s.hotkey_prev, Action::Prev),
-    ];
-    for (role, keys) in s.layer_hotkeys {
-        binds.push((keys, Action::Role(role)));
-    }
-    for (keys, action) in binds {
-        if keys.trim().is_empty() {
-            continue;
-        }
-        let h = app.clone();
-        let res = gs.on_shortcut(keys.as_str(), move |_app, _sc, ev| {
-            if ev.state() == ShortcutState::Pressed {
-                handle(&h, action.clone());
-            }
-        });
-        if let Err(e) = res {
-            eprintln!("hotkey '{keys}' not registered: {e}");
-        }
-    }
-}
-
-pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "Show Iris", true, None::<&str>)?;
-    let toggle = MenuItem::with_id(app, "toggle", "Toggle Overlay", true, None::<&str>)?;
-    let check_update = MenuItem::with_id(app, "check_update", "Check for Updates...", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &toggle, &check_update, &quit])?;
-    TrayIconBuilder::new()
-        .icon(app.default_window_icon().unwrap().clone())
-        .tooltip("Iris")
-        .menu(&menu)
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app, ev| match ev.id.as_ref() {
-            "show" => show_main(app),
-            "toggle" => overlay::toggle(app),
-            "check_update" => crate::updater::handle_tray_action(app),
-            "quit" => app.exit(0),
-            _ => {}
-        })
-        .on_tray_icon_event(|tray, ev| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = ev {
-                show_main(tray.app_handle());
-            }
-        })
-        .build(app)?;
-    Ok(())
-}
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 pub fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
@@ -97,53 +23,117 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
-/// Polls for the target game process, emits foreground window changes,
-/// and continuously keeps overlay on top of borderless/fullscreen games.
+pub fn build_tray(app: &AppHandle) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "Open Iris", true, None::<&str>)?;
+    let toggle = MenuItem::with_id(app, "toggle", "Toggle Overlay", true, None::<&str>)?;
+    let update = MenuItem::with_id(app, "check_updates", "Check for Updates", true, None::<&str>)?;
+    let sep = PredefinedMenuItem::separator(app)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Iris", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &toggle, &update, &sep, &quit])?;
+
+    let mut builder = TrayIconBuilder::new()
+        .tooltip("Iris — Custom HUD & Overlay Manager")
+        .menu(&menu)
+        .on_menu_event(|app, ev| match ev.id.as_ref() {
+            "show" => show_main(app),
+            "toggle" => overlay::toggle(app),
+            "check_updates" => {
+                show_main(app);
+                let _ = app.emit_to("main", "navigate-tab", "settings");
+                let handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = crate::updater::updater_check(handle).await;
+                });
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, ev| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = ev
+            {
+                show_main(tray.app_handle());
+            }
+        });
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon);
+    }
+    builder.build(app)?;
+    Ok(())
+}
+
+pub fn register_hotkeys(app: &AppHandle) {
+    let s = app.state::<AppState>().settings().clone();
+    let gs = app.global_shortcut();
+    let _ = gs.unregister_all();
+
+    let bind = |key: &str, f: Box<dyn Fn(&AppHandle) + Send + Sync>| {
+        let k = key.trim();
+        if k.is_empty() {
+            return;
+        }
+        if let Ok(sc) = k.parse::<Shortcut>() {
+            let _ = gs.on_shortcut(sc, move |app, _, ev| {
+                if ev.state == ShortcutState::Pressed {
+                    f(app);
+                }
+            });
+        }
+    };
+
+    bind(&s.hotkey_toggle, Box::new(|a| overlay::toggle(a)));
+    bind(&s.hotkey_next, Box::new(|a| { let _ = a.emit_to("main", "cycle-overlay", 1i32); }));
+    bind(&s.hotkey_prev, Box::new(|a| { let _ = a.emit_to("main", "cycle-overlay", -1i32); }));
+    for (role, key) in s.layer_hotkeys {
+        bind(&key, Box::new(move |a| { let _ = a.emit_to("main", "toggle-layer-role", role.clone()); }));
+    }
+}
+
 pub fn spawn_game_watcher(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last_fg_exe: Option<String> = None;
+        let mut last_shown: Option<bool> = None;
         loop {
-            let (mode, exe, low, enabled, _auto_switch, auto_hide) = {
+            let (mode, exe, low, enabled, auto_hide) = {
                 let st = app.state::<AppState>();
-                let s = st.settings.lock().unwrap().clone();
-                let o = st.overlay.lock().unwrap().clone();
-                (s.target_mode, s.target_exe, s.low_resource, o.enabled, s.auto_game_switch, s.auto_hide_unfocused)
+                let s = st.settings().clone();
+                let o = st.overlay();
+                let on = o.enabled && o.has_content();
+                (s.target_mode, s.target_exe, s.low_resource, on, s.auto_hide_unfocused)
             };
 
-            // Detect active foreground window process
-            let fg = win32::get_foreground_process_name();
+            let (fg, target_running) = win32::poll_processes(&exe, mode == "game");
             if fg != last_fg_exe {
                 let _ = app.emit_to("main", "foreground-process-changed", &fg);
                 last_fg_exe = fg.clone();
             }
 
             let st = app.state::<AppState>();
-            let running = mode == "game" && win32::process_running(exe.trim());
+            let running = mode == "game" && target_running;
             if st.game_running.swap(running, Ordering::Relaxed) != running {
                 overlay::refresh(&app);
             } else if enabled {
-                // Auto-hide only suppresses if specifically in game mode and tabbed to non-game apps
                 let is_unfocused_non_game = auto_hide && mode == "game" && fg.as_deref().map_or(false, |f| {
                     let f_lower = f.to_ascii_lowercase();
-                    f_lower != "iris.exe" && (
-                        f_lower.contains("discord")
-                            || f_lower.contains("chrome")
-                            || f_lower.contains("edge")
-                            || f_lower.contains("firefox")
-                            || f_lower.contains("explorer")
-                            || f_lower.contains("code")
-                            || f_lower.contains("spotify")
-                    )
+                    f_lower != "iris.exe"
+                        && ["discord", "chrome", "edge", "firefox", "explorer", "code", "spotify"]
+                            .iter()
+                            .any(|k| f_lower.contains(k))
                 });
 
-                let is_visible_mode = mode != "game" || running;
+                let should_show = (mode != "game" || running) && !is_unfocused_non_game;
                 if let Some(w) = app.get_webview_window(overlay::LABEL) {
                     if let Ok(h) = w.hwnd() {
-                        if is_visible_mode && !is_unfocused_non_game {
+                        if should_show {
                             win32::show(h.0 as isize);
-                            win32::assert_topmost(h.0 as isize);
-                        } else {
+                            last_shown = Some(true);
+                        } else if last_shown != Some(false) {
                             win32::hide(h.0 as isize);
+                            last_shown = Some(false);
                         }
                     }
                 }
@@ -153,37 +143,31 @@ pub fn spawn_game_watcher(app: AppHandle) {
     });
 }
 
-/// Registers the `iris://` URL protocol in HKCU (no admin required) so clicking
-/// "Send to Iris" on veevisuals.art or Aether Deck opens Iris and imports overlays directly.
+fn run_reg(args: &[&str]) {
+    let _ = std::process::Command::new("reg")
+        .args(args)
+        .creation_flags(0x0800_0000)
+        .output();
+}
+
 pub fn register_url_protocol() {
     let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
     if exe.is_empty() {
         return;
     }
-    let _ = std::process::Command::new("reg")
-        .args(["add", r"HKCU\Software\Classes\iris", "/ve", "/t", "REG_SZ", "/d", "URL:Iris Protocol", "/f"])
-        .creation_flags(0x0800_0000)
-        .output();
-    let _ = std::process::Command::new("reg")
-        .args(["add", r"HKCU\Software\Classes\iris", "/v", "URL Protocol", "/t", "REG_SZ", "/d", "", "/f"])
-        .creation_flags(0x0800_0000)
-        .output();
-    let _ = std::process::Command::new("reg")
-        .args(["add", r"HKCU\Software\Classes\iris\shell\open\command", "/ve", "/t", "REG_SZ", "/d", &format!("\"{exe}\" \"%1\""), "/f"])
-        .creation_flags(0x0800_0000)
-        .output();
+    run_reg(&["add", r"HKCU\Software\Classes\iris", "/ve", "/t", "REG_SZ", "/d", "URL:Iris Protocol", "/f"]);
+    run_reg(&["add", r"HKCU\Software\Classes\iris", "/v", "URL Protocol", "/t", "REG_SZ", "/d", "", "/f"]);
+    run_reg(&["add", r"HKCU\Software\Classes\iris\shell\open\command", "/ve", "/t", "REG_SZ", "/d", &format!("\"{exe}\" \"%1\""), "/f"]);
 }
 
 pub fn set_autostart(enabled: bool) {
     const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-    let mut cmd = std::process::Command::new("reg");
     if enabled {
         let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-        cmd.args(["add", KEY, "/v", "Iris", "/t", "REG_SZ", "/d", &format!("\"{exe}\" --minimized"), "/f"]);
+        run_reg(&["add", KEY, "/v", "Iris", "/t", "REG_SZ", "/d", &format!("\"{exe}\" --minimized"), "/f"]);
     } else {
-        cmd.args(["delete", KEY, "/v", "Iris", "/f"]);
+        run_reg(&["delete", KEY, "/v", "Iris", "/f"]);
     }
-    let _ = cmd.creation_flags(0x0800_0000).output(); // CREATE_NO_WINDOW
 }
 
 #[derive(Serialize)]
@@ -223,14 +207,24 @@ pub fn list_monitors(app: AppHandle) -> Vec<MonitorInfo> {
 
 #[tauri::command]
 pub fn settings_get(state: State<AppState>) -> Settings {
-    state.settings.lock().unwrap().clone()
+    state.settings().clone()
 }
 
 #[tauri::command]
-pub fn settings_save(app: AppHandle, state: State<AppState>, settings: Settings) -> Result<Settings, String> {
-    let prev_autostart = state.settings.lock().unwrap().start_with_windows;
+pub fn settings_save(app: AppHandle, state: State<AppState>, mut settings: Settings) -> Result<Settings, String> {
+    if settings.target_mode != "game" && settings.target_mode != "topmost" {
+        settings.target_mode = "topmost".into();
+    }
+    settings.target_exe = sanitize_text(&settings.target_exe, 128);
+    settings.hotkey_toggle = sanitize_text(&settings.hotkey_toggle, 64);
+    settings.hotkey_next = sanitize_text(&settings.hotkey_next, 64);
+    settings.hotkey_prev = sanitize_text(&settings.hotkey_prev, 64);
+    settings.game_profiles.retain(|k, v| k.len() <= 64 && v.len() <= 128);
+    settings.layer_hotkeys.retain(|k, v| KNOWN_ROLES.contains(&k.as_str()) && v.len() <= 64);
+
+    let prev_autostart = state.settings().start_with_windows;
     write_json_atomic(&state.settings_path(), &settings)?;
-    *state.settings.lock().unwrap() = settings.clone();
+    *state.settings() = settings.clone();
     register_hotkeys(&app);
     if prev_autostart != settings.start_with_windows {
         set_autostart(settings.start_with_windows);

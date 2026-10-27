@@ -1,7 +1,5 @@
 //! Thin native Win32 layer: click-through overlay styles, placement,
-//! capture exclusion, display refresh rate and process lookup.
-//! All functions take the raw HWND value (`isize`) so they are independent of
-//! the `windows` crate version Tauri links internally.
+//! capture exclusion, display refresh rate and single-pass process lookup.
 
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -17,9 +15,6 @@ fn hwnd(raw: isize) -> HWND {
     HWND(raw as *mut c_void)
 }
 
-/// WS_EX_LAYERED | WS_EX_TRANSPARENT (click-through, zero input latency)
-/// | WS_EX_TOPMOST | WS_EX_TOOLWINDOW (no Alt+Tab / taskbar entry)
-/// | WS_EX_NOACTIVATE (never steals focus from the game).
 pub fn apply_overlay_styles(raw: isize) {
     unsafe {
         let h = hwnd(raw);
@@ -43,7 +38,6 @@ pub fn apply_overlay_styles(raw: isize) {
     }
 }
 
-/// Cover the given physical-pixel rectangle (borderless "fullscreen").
 pub fn place(raw: isize, x: i32, y: i32, w: i32, h: i32) {
     unsafe {
         let _ = SetWindowPos(hwnd(raw), Some(HWND_TOPMOST), x, y, w, h, SWP_NOACTIVATE);
@@ -53,20 +47,10 @@ pub fn place(raw: isize, x: i32, y: i32, w: i32, h: i32) {
 pub fn show(raw: isize) {
     unsafe {
         let _ = ShowWindow(hwnd(raw), SW_SHOWNOACTIVATE);
-        let _ = SetWindowPos(
-            hwnd(raw),
-            Some(HWND_TOPMOST),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
+        assert_topmost(raw);
     }
 }
 
-/// Reassert HWND_TOPMOST without stealing focus or moving the window.
-/// Keeps overlay visible over borderless, windowed, and fullscreen (FSO) games.
 pub fn assert_topmost(raw: isize) {
     unsafe {
         let _ = SetWindowPos(
@@ -87,7 +71,6 @@ pub fn hide(raw: isize) {
     }
 }
 
-/// `true` => WDA_EXCLUDEFROMCAPTURE (Win10 2004+): hidden from OBS/screenshots.
 pub fn set_capture_excluded(raw: isize, excluded: bool) {
     unsafe {
         let _ = SetWindowDisplayAffinity(
@@ -97,7 +80,6 @@ pub fn set_capture_excluded(raw: isize, excluded: bool) {
     }
 }
 
-/// Current refresh rate of a display by its GDI device name (`\\.\DISPLAY1`).
 pub fn refresh_rate(device_name: &str) -> u32 {
     unsafe {
         let wide: Vec<u16> = device_name.encode_utf16().chain(Some(0)).collect();
@@ -110,49 +92,58 @@ pub fn refresh_rate(device_name: &str) -> u32 {
     }
 }
 
-/// Is a process with this exe name (e.g. `Overwatch.exe`) running?
-pub fn process_running(exe: &str) -> bool {
-    unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return false };
-        let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
-        let mut found = false;
-        if Process32FirstW(snap, &mut entry).is_ok() {
-            loop {
-                let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
-                if String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case(exe) {
-                    found = true;
-                    break;
-                }
-                if Process32NextW(snap, &mut entry).is_err() {
-                    break;
-                }
-            }
-        }
-        let _ = CloseHandle(snap);
-        found
+/// Zero-allocation case-insensitive comparison between a null-terminated UTF-16 buffer and an ASCII/UTF-8 target.
+#[inline]
+fn eq_utf16_ignore_ascii_case(wide: &[u16], target: &str) -> bool {
+    let len = wide.iter().position(|&c| c == 0).unwrap_or(wide.len());
+    if len != target.len() {
+        return false;
     }
+    wide[..len]
+        .iter()
+        .zip(target.bytes())
+        .all(|(&w, b)| w <= 0x7F && (w as u8).eq_ignore_ascii_case(&b))
 }
 
-/// Returns the executable name of the currently focused foreground window (e.g. `Overwatch.exe`).
-pub fn get_foreground_process_name() -> Option<String> {
+/// Single-pass kernel snapshot that resolves both:
+/// 1) The foreground window's executable name (`None` if no foreground window)
+/// 2) Whether `target_exe` is currently running anywhere on the system
+pub fn poll_processes(target_exe: &str, check_target: bool) -> (Option<String>, bool) {
+    let target = target_exe.trim();
     unsafe {
-        let h = GetForegroundWindow();
-        if h.0.is_null() {
-            return None;
+        let fg_hwnd = GetForegroundWindow();
+        let mut fg_pid = 0u32;
+        if !fg_hwnd.0.is_null() {
+            let _ = GetWindowThreadProcessId(fg_hwnd, Some(&mut fg_pid));
         }
-        let mut pid = 0u32;
-        let _ = GetWindowThreadProcessId(h, Some(&mut pid));
-        if pid == 0 {
-            return None;
+        let want_fg = fg_pid != 0;
+        let want_target = check_target && !target.is_empty();
+
+        if !want_fg && !want_target {
+            return (None, false);
         }
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return None };
-        let mut entry = PROCESSENTRY32W { dwSize: size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
-        let mut result = None;
+
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return (None, false);
+        };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+
+        let mut fg_name: Option<String> = None;
+        let mut target_running = false;
+
         if Process32FirstW(snap, &mut entry).is_ok() {
             loop {
-                if entry.th32ProcessID == pid {
+                if want_fg && fg_name.is_none() && entry.th32ProcessID == fg_pid {
                     let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
-                    result = Some(String::from_utf16_lossy(&entry.szExeFile[..len]));
+                    fg_name = Some(String::from_utf16_lossy(&entry.szExeFile[..len]));
+                }
+                if want_target && !target_running && eq_utf16_ignore_ascii_case(&entry.szExeFile, target) {
+                    target_running = true;
+                }
+                if (!want_fg || fg_name.is_some()) && (!want_target || target_running) {
                     break;
                 }
                 if Process32NextW(snap, &mut entry).is_err() {
@@ -161,6 +152,6 @@ pub fn get_foreground_process_name() -> Option<String> {
             }
         }
         let _ = CloseHandle(snap);
-        result
+        (fg_name, target_running)
     }
 }

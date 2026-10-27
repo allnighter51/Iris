@@ -9,12 +9,12 @@ mod win32;
 
 use model::{AppState, Settings};
 use tauri::{Emitter, Manager, WindowEvent};
+use updater::UpdaterState;
 
 fn main() {
     let root = model::default_root();
     let settings: Settings = model::read_json(&root.join("settings.json")).unwrap_or_default();
 
-    // WebView2 flags must be set before any webview is created.
     let mut browser_args = String::from(
         "--disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-renderer-backgrounding",
     );
@@ -28,7 +28,7 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             system::show_main(app);
             for arg in argv {
-                if arg.starts_with("iris://") {
+                if arg.starts_with("iris://") && arg.len() <= 4096 {
                     let _ = app.emit_to("main", "iris-protocol-url", arg);
                 }
             }
@@ -36,6 +36,7 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::new(root, settings))
+        .manage(UpdaterState::default())
         .invoke_handler(tauri::generate_handler![
             vault::vault_load,
             vault::import_asset,
@@ -60,31 +61,40 @@ fn main() {
         .setup(|app| {
             let handle = app.handle().clone();
             overlay::create_window(&handle)?;
-            system::build_tray(&handle)?;
+            let _ = system::build_tray(&handle);
             system::register_hotkeys(&handle);
             system::register_url_protocol();
             system::spawn_game_watcher(handle.clone());
-            updater::check_on_startup(handle.clone());
-            if !std::env::args().any(|a| a == "--minimized") {
-                system::show_main(&handle);
+
+            let check_startup = app.state::<AppState>().settings().check_updates_on_startup;
+            if check_startup {
+                updater::check_on_startup(handle.clone());
             }
-            // If opened via iris:// custom URL protocol, dispatch to UI
+
             for arg in std::env::args() {
-                if arg.starts_with("iris://") {
+                if arg.starts_with("iris://") && arg.len() <= 4096 {
                     let h = handle.clone();
+                    let url = arg.clone();
                     std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(800));
-                        let _ = h.emit_to("main", "iris-protocol-url", arg);
+                        std::thread::sleep(std::time::Duration::from_millis(900));
+                        let _ = h.emit_to("main", "iris-protocol-url", url);
                     });
+                }
+            }
+
+            let minimized = std::env::args().any(|a| a == "--minimized");
+            if !minimized {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
                 }
             }
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
+            if window.label() == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
                     let app = window.app_handle();
-                    let to_tray = app.state::<AppState>().settings.lock().unwrap().close_to_tray;
+                    let to_tray = app.state::<AppState>().settings().close_to_tray;
                     if to_tray {
                         api.prevent_close();
                         let _ = window.hide();

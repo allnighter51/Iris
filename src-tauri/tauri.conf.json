@@ -27,8 +27,11 @@
       }
     ],
     "security": {
-      "csp": null,
-      "assetProtocol": { "enable": true, "scope": ["$APPDATA/**"] }
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost https://asset.localhost blob: data:; font-src 'self' data:; connect-src ipc: http://ipc.localhost https://ipc.localhost https://*; object-src 'none'; base-uri 'self'",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/art.veevisuals.iris/**"]
+      }
     }
   },
   "bundle": {
