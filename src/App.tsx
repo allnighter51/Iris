@@ -228,6 +228,12 @@ export default function App() {
     if (!vault) return;
     recordSwap(item.id);
     setLive(false);
+    try {
+      const raw = localStorage.getItem("iris_recent_display_ids");
+      const list = raw ? JSON.parse(raw) : [];
+      const updated = [item.id, ...list.filter((x: string) => x !== item.id)].slice(0, 8);
+      localStorage.setItem("iris_recent_display_ids", JSON.stringify(updated));
+    } catch { /* ignore */ }
     setOverlay((o) => ({
       ...o, enabled: true, itemId: item.id, path: `${vault.assetsDir}\\${item.file}`,
       width: item.width, height: item.height, transform: item.transform ?? DEFAULT_TRANSFORM,
@@ -410,8 +416,12 @@ export default function App() {
         {tab === "display" && (
           <Display
             vault={vault} setVault={setVault} item={activeItem} overlay={overlay} setOverlay={setOverlay}
-            monitors={monitors} status={status} goVault={() => setTab("vault")} compositeLive={live}
+            monitors={monitors} status={status} goVault={() => setTab("vault")}
+            goLayering={() => setTab("layering")}
+            compositeLive={live}
+            compositeLayersCount={layers.filter((l) => l.visible).length}
             stopComposite={() => setLive(false)} settings={settings} saveSettings={saveSettings}
+            onLoadItem={(it) => loadItem(it, true)}
           />
         )}
         {tab === "layering" && (

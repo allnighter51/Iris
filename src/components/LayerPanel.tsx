@@ -33,12 +33,22 @@ interface Props {
   roleHotkeys: Record<string, string>;
 }
 
-export function LayerPanel({ vault, layers, setLayers, selectedId, select, update, updateFx, duplicate, remove, roleHotkeys }: Props) {
+export interface LayerStackProps {
+  vault: VaultData;
+  layers: Layer[];
+  setLayers: (f: (l: Layer[]) => Layer[]) => void;
+  selectedId: string | null;
+  selectedIds?: string[];
+  select: (id: string | null, multi?: boolean) => void;
+  update: (id: string, p: Partial<Layer>) => void;
+  duplicate: (id: string) => void;
+  remove: (id: string) => void;
+}
+
+export function LayerStack({ vault, layers, setLayers, selectedId, selectedIds, select, update, duplicate, remove }: LayerStackProps) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<{ id: string; after: boolean } | null>(null);
-  const [step, setStep] = useState(1);
   const items = new Map(vault.items.map((i) => [i.id, i]));
-  const sel = layers.find((l) => l.id === selectedId) ?? null;
 
   const drop = () => {
     if (dragId && overId && dragId !== overId.id) {
@@ -55,81 +65,105 @@ export function LayerPanel({ vault, layers, setLayers, selectedId, select, updat
   };
 
   return (
-    <aside className="stackpanel">
-      <section className="card bracket stack">
-        <div className="panel-title">
-          <span>Layer Stack</span>
-          <span className="mono muted small">{layers.length} layers · top = front</span>
-        </div>
-        <div className="rows">
-          {layers.map((l, i) => {
-            const it = items.get(l.vaultItemId);
-            const fx = fxOf(l);
-            return (
-              <div
-                key={l.id}
-                className={`lrow${l.id === selectedId ? " sel" : ""}${!l.visible ? " hidden" : ""}${dragId === l.id ? " dragging" : ""}${overId?.id === l.id ? (overId.after ? " drop-after" : " drop-before") : ""}`}
-                onClick={() => select(l.id)}
-                onDragOver={(e) => {
-                  if (!dragId) return;
-                  e.preventDefault();
-                  const r = e.currentTarget.getBoundingClientRect();
-                  setOverId({ id: l.id, after: e.clientY > r.top + r.height / 2 });
+    <section className="card bracket stack workbench-col">
+      <div className="panel-title">
+        <span>Layer Stack</span>
+        <span className="mono muted small">{layers.length} layers · top = front</span>
+      </div>
+      <div className="rows">
+        {layers.map((l, i) => {
+          const it = items.get(l.vaultItemId);
+          const fx = fxOf(l);
+          const isSelected = selectedIds ? selectedIds.includes(l.id) : l.id === selectedId;
+          return (
+            <div
+              key={l.id}
+              className={`lrow${isSelected ? " sel" : ""}${!l.visible ? " hidden" : ""}${dragId === l.id ? " dragging" : ""}${overId?.id === l.id ? (overId.after ? " drop-after" : " drop-before") : ""}`}
+              onClick={(e) => select(l.id, e.shiftKey)}
+              onDragOver={(e) => {
+                if (!dragId) return;
+                e.preventDefault();
+                const r = e.currentTarget.getBoundingClientRect();
+                setOverId({ id: l.id, after: e.clientY > r.top + r.height / 2 });
+              }}
+              onDrop={(e) => { e.preventDefault(); drop(); }}
+            >
+              <span
+                className="handle"
+                draggable
+                title="Drag to reorder"
+                onDragStart={(e) => {
+                  const row = e.currentTarget.closest(".lrow") as HTMLElement;
+                  e.dataTransfer.setDragImage(row, 12, 12);
+                  e.dataTransfer.setData("application/x-iris-layer", l.id);
+                  setDragId(l.id);
+                  select(l.id);
                 }}
-                onDrop={(e) => { e.preventDefault(); drop(); }}
+                onDragEnd={() => { setDragId(null); setOverId(null); }}
               >
-                <span
-                  className="handle"
-                  draggable
-                  title="Drag to reorder"
-                  onDragStart={(e) => {
-                    const row = e.currentTarget.closest(".lrow") as HTMLElement;
-                    e.dataTransfer.setDragImage(row, 12, 12);
-                    e.dataTransfer.setData("application/x-iris-layer", l.id);
-                    setDragId(l.id);
-                    select(l.id);
-                  }}
-                  onDragEnd={() => { setDragId(null); setOverId(null); }}
-                >
-                  ⋮⋮
-                </span>
-                <button className={`ibtn${l.visible ? " on" : ""}`} title={l.visible ? "Hide" : "Show"} onClick={(e) => { e.stopPropagation(); update(l.id, { visible: !l.visible }); }}>
-                  <EyeIcon off={!l.visible} />
-                </button>
-                <button className={`ibtn${l.locked ? " lock" : ""}`} title={l.locked ? "Unlock" : "Lock"} onClick={(e) => { e.stopPropagation(); update(l.id, { locked: !l.locked }); }}>
-                  <LockIcon open={!l.locked} />
-                </button>
-                <div className="checker lthumb">
-                  {it ? <img draggable={false} src={assetUrl(it.thumb ? vault.thumbsDir : vault.assetsDir, it.thumb ?? it.file)} alt="" /> : <span className="mono">?</span>}
-                </div>
-                <div className="lname">
-                  <div className="lname-top">{l.name}</div>
-                  <div className="lname-sub">
-                    <span className={`rbadge r-${l.role}`}>{roleBadge(l.role)}</span>
-                    <span className="mono muted">z{layers.length - 1 - i}</span>
-                    {fx.group && <span className="rbadge link-badge" title="Linked group — moves together">🔗{fx.group}</span>}
-                    {(fx.cropT || fx.cropR || fx.cropB || fx.cropL) ? <span className="mono muted" title="Cropped">✂</span> : null}
-                    {!it && <span className="mono warn">MISSING</span>}
-                  </div>
-                </div>
-                <button className="ibtn" title="Duplicate" onClick={(e) => { e.stopPropagation(); duplicate(l.id); }}><CopyIcon /></button>
-                <button className="ibtn del" title="Delete layer" onClick={(e) => { e.stopPropagation(); remove(l.id); }}><TrashIcon /></button>
+                ⋮⋮
+              </span>
+              <button className={`ibtn${l.visible ? " on" : ""}`} title={l.visible ? "Hide (Alt+Shift+H)" : "Show (Alt+Shift+H)"} onClick={(e) => { e.stopPropagation(); update(l.id, { visible: !l.visible }); }}>
+                <EyeIcon off={!l.visible} />
+              </button>
+              <button className={`ibtn${l.locked ? " lock" : ""}`} title={l.locked ? "Unlock (Alt+Shift+L)" : "Lock (Alt+Shift+L)"} onClick={(e) => { e.stopPropagation(); update(l.id, { locked: !l.locked }); }}>
+                <LockIcon open={!l.locked} />
+              </button>
+              <div className="checker lthumb">
+                {it ? <img draggable={false} src={assetUrl(it.thumb ? vault.thumbsDir : vault.assetsDir, it.thumb ?? it.file)} alt="" /> : <span className="mono">?</span>}
               </div>
-            );
-          })}
-          {!layers.length && (
-            <div className="muted small empty-note">
-              The stack is empty. Add elements from the Vault Drawer, drop them on the canvas, or right-click a Vault card → “Send to Layering Stack”.
+              <div className="lname">
+                <div className="lname-top">{l.name}</div>
+                <div className="lname-sub">
+                  <span className={`rbadge r-${l.role}`}>{roleBadge(l.role)}</span>
+                  <span className="mono muted">z{layers.length - 1 - i}</span>
+                  {fx.group && <span className="rbadge link-badge" title="Linked group — moves together">🔗{fx.group}</span>}
+                  {(fx.cropT || fx.cropR || fx.cropB || fx.cropL) ? <span className="mono muted" title="Cropped">✂</span> : null}
+                  {!it && <span className="mono warn">MISSING</span>}
+                </div>
+              </div>
+              <button className="ibtn" title="Duplicate (Ctrl+D)" onClick={(e) => { e.stopPropagation(); duplicate(l.id); }}><CopyIcon /></button>
+              <button className="ibtn del" title="Delete layer (Del)" onClick={(e) => { e.stopPropagation(); remove(l.id); }}><TrashIcon /></button>
             </div>
-          )}
-        </div>
-      </section>
+          );
+        })}
+        {!layers.length && (
+          <div className="muted small empty-note">
+            The stack is empty. Add elements from the Vault Drawer, drop them on the canvas, or right-click a Vault card → “Send to Layering Stack”.
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
 
-      <section className="card bracket inspector-l">
-        <div className="panel-title">
-          <span>Layer Inspector</span>
-          {sel && <span className="mono muted small">{items.get(sel.vaultItemId)?.width}×{items.get(sel.vaultItemId)?.height}</span>}
-        </div>
+export interface LayerInspectorProps {
+  vault: VaultData;
+  layers: Layer[];
+  selectedId: string | null;
+  selectedIds?: string[];
+  update: (id: string, p: Partial<Layer>) => void;
+  updateFx: (id: string, p: Partial<LayerFx>) => void;
+  roleHotkeys: Record<string, string>;
+}
+
+export function LayerInspector({ vault, layers, selectedId, selectedIds, update, updateFx, roleHotkeys }: LayerInspectorProps) {
+  const [step, setStep] = useState(1);
+  const items = new Map(vault.items.map((i) => [i.id, i]));
+  const sel = layers.find((l) => l.id === selectedId) ?? null;
+  const isMulti = (selectedIds?.length ?? 0) > 1;
+
+  return (
+    <section className="card bracket inspector-l workbench-col">
+      <div className="panel-title">
+        <span>Layer Inspector</span>
+        {isMulti ? (
+          <span className="mono ok small">{selectedIds!.length} layers selected</span>
+        ) : sel ? (
+          <span className="mono muted small">{items.get(sel.vaultItemId)?.width}×{items.get(sel.vaultItemId)?.height}</span>
+        ) : null}
+      </div>
+      <div className="inspector-l-content">
         {!sel ? (
           <div className="muted small empty-note">Select a layer to edit its transform.</div>
         ) : (
@@ -204,8 +238,33 @@ export function LayerPanel({ vault, layers, setLayers, selectedId, select, updat
             <FxControls layer={sel} updateFx={updateFx} />
           </fieldset>
         )}
-      </section>
-    </aside>
+      </div>
+    </section>
+  );
+}
+
+export function LayerPanel({ vault, layers, setLayers, selectedId, select, update, updateFx, duplicate, remove, roleHotkeys }: Props) {
+  return (
+    <>
+      <LayerStack
+        vault={vault}
+        layers={layers}
+        setLayers={setLayers}
+        selectedId={selectedId}
+        select={select}
+        update={update}
+        duplicate={duplicate}
+        remove={remove}
+      />
+      <LayerInspector
+        vault={vault}
+        layers={layers}
+        selectedId={selectedId}
+        update={update}
+        updateFx={updateFx}
+        roleHotkeys={roleHotkeys}
+      />
+    </>
   );
 }
 
