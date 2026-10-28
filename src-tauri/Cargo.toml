@@ -2,7 +2,7 @@
 name = "iris"
 version = "0.1.4"
 description = "Iris Desktop HUD & Stream Overlay Manager"
-authors = ["VeeVisuals <support@veevisuals.art>"]
+authors = ["Venus Visuals <support@veevisuals.art>"]
 homepage = "https://github.com/allnighter51/Iris"
 repository = "https://github.com/allnighter51/Iris"
 license = "MIT"
@@ -30,8 +30,8 @@ windows = { version = "0.61", features = [
 ] }
 
 [profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
+opt-level = 2
+lto = "thin"
+codegen-units = 16
+panic = "unwind"
+strip = false

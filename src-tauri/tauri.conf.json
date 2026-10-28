@@ -37,8 +37,8 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi"],
-    "publisher": "VeeVisuals",
-    "copyright": "Copyright © 2026 VeeVisuals. All rights reserved.",
+    "publisher": "Venus Visuals",
+    "copyright": "Copyright 2026 Venus Visuals. Open Source MIT License.",
     "category": "Utility",
     "shortDescription": "Iris Desktop HUD & Stream Overlay Manager",
     "longDescription": "Lightweight desktop HUD and custom PNG overlay manager for gaming and streaming.",
