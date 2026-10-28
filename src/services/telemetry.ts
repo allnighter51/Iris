@@ -22,7 +22,7 @@ export type TelemetryEventType =
 
 export interface TelemetryPayload {
   event: TelemetryEventType;
-  appVersion: string;
+  appVersion?: string;
   gameCategory?: string | null;
   elementType?: string | null;
   resolution?: string | null;
@@ -58,7 +58,7 @@ export async function sendTelemetryEvent(
 
   const body = {
     client_id: clientId,
-    app_version: payload.appVersion || "0.1.2",
+    app_version: payload.appVersion || "unknown",
     event: payload.event,
     game_category: payload.gameCategory || null,
     element_type: payload.elementType || null,

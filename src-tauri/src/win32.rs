@@ -9,6 +9,10 @@ use windows::Win32::Graphics::Gdi::{EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
+use windows::Win32::System::Registry::{
+    RegCloseKey, RegCreateKeyW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+    HKEY, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_EXPAND_SZ, REG_SZ, REG_VALUE_TYPE,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 fn hwnd(raw: isize) -> HWND {
@@ -153,5 +157,116 @@ pub fn poll_processes(target_exe: &str, check_target: bool) -> (Option<String>, 
         }
         let _ = CloseHandle(snap);
         (fg_name, target_running)
+    }
+}
+
+/// Native Win32 registry read for string (REG_SZ / REG_EXPAND_SZ) values under HKCU.
+/// Performs in-process registry query without spawning `reg.exe` or shell processes.
+pub fn reg_get_sz(hkey_root: HKEY, subkey: &str, value_name: Option<&str>) -> Option<String> {
+    unsafe {
+        let wide_sub: Vec<u16> = subkey.encode_utf16().chain(Some(0)).collect();
+        let mut hkey = HKEY::default();
+        if RegOpenKeyExW(
+            hkey_root,
+            PCWSTR(wide_sub.as_ptr()),
+            None,
+            KEY_QUERY_VALUE,
+            &mut hkey,
+        )
+        .is_err()
+        {
+            return None;
+        }
+
+        let wide_name: Option<Vec<u16>> = value_name.map(|n| n.encode_utf16().chain(Some(0)).collect());
+        let name_ptr = wide_name.as_ref().map_or(PCWSTR::null(), |w| PCWSTR(w.as_ptr()));
+
+        let mut data_type = REG_VALUE_TYPE(0);
+        let mut byte_len: u32 = 0;
+        let query_res = RegQueryValueExW(
+            hkey,
+            name_ptr,
+            None,
+            Some(&mut data_type),
+            None,
+            Some(&mut byte_len),
+        );
+
+        if query_res.is_err() || (data_type != REG_SZ && data_type != REG_EXPAND_SZ) || byte_len < 2 {
+            let _ = RegCloseKey(hkey);
+            return None;
+        }
+
+        let mut buf: Vec<u8> = vec![0u8; byte_len as usize];
+        let res = RegQueryValueExW(
+            hkey,
+            name_ptr,
+            None,
+            Some(&mut data_type),
+            Some(buf.as_mut_ptr()),
+            Some(&mut byte_len),
+        );
+        let _ = RegCloseKey(hkey);
+
+        if res.is_ok() {
+            let wide_slice: &[u16] = std::slice::from_raw_parts(buf.as_ptr() as *const u16, (byte_len as usize) / 2);
+            let len = wide_slice.iter().position(|&c| c == 0).unwrap_or(wide_slice.len());
+            Some(String::from_utf16_lossy(&wide_slice[..len]))
+        } else {
+            None
+        }
+    }
+}
+
+/// Native Win32 registry write for string (REG_SZ) values under HKCU.
+/// Operates entirely in-process without spawning `reg.exe` or child processes.
+pub fn reg_set_sz(hkey_root: HKEY, subkey: &str, value_name: Option<&str>, value_data: &str) -> bool {
+    unsafe {
+        let wide_sub: Vec<u16> = subkey.encode_utf16().chain(Some(0)).collect();
+        let mut hkey = HKEY::default();
+        if RegCreateKeyW(
+            hkey_root,
+            PCWSTR(wide_sub.as_ptr()),
+            &mut hkey,
+        )
+        .is_err()
+        {
+            return false;
+        }
+
+        let wide_name: Option<Vec<u16>> = value_name.map(|n| n.encode_utf16().chain(Some(0)).collect());
+        let name_ptr = wide_name.as_ref().map_or(PCWSTR::null(), |w| PCWSTR(w.as_ptr()));
+
+        let wide_val: Vec<u16> = value_data.encode_utf16().chain(Some(0)).collect();
+        let val_bytes = std::slice::from_raw_parts(wide_val.as_ptr() as *const u8, wide_val.len() * 2);
+
+        let res = RegSetValueExW(hkey, name_ptr, None, REG_SZ, Some(val_bytes));
+        let _ = RegCloseKey(hkey);
+        res.is_ok()
+    }
+}
+
+/// Native Win32 registry delete value under HKCU.
+/// Operates in-process without spawning `reg.exe`.
+pub fn reg_delete_val(hkey_root: HKEY, subkey: &str, value_name: &str) -> bool {
+    unsafe {
+        let wide_sub: Vec<u16> = subkey.encode_utf16().chain(Some(0)).collect();
+        let mut hkey = HKEY::default();
+        if RegOpenKeyExW(
+            hkey_root,
+            PCWSTR(wide_sub.as_ptr()),
+            None,
+            KEY_SET_VALUE,
+            &mut hkey,
+        )
+        .is_err()
+        {
+            return false;
+        }
+
+        let wide_name: Vec<u16> = value_name.encode_utf16().chain(Some(0)).collect();
+        let res = RegDeleteValueW(hkey, PCWSTR(wide_name.as_ptr()));
+        let _ = RegCloseKey(hkey);
+        res.is_ok()
     }
 }

@@ -3,11 +3,8 @@
 
 use crate::{model::*, overlay, win32};
 use serde::Serialize;
-use std::{
-    os::windows::process::CommandExt,
-    sync::atomic::Ordering,
-    time::Duration,
-};
+use std::{sync::atomic::Ordering, time::Duration};
+use windows::Win32::System::Registry::HKEY_CURRENT_USER;
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -93,6 +90,10 @@ pub fn register_hotkeys(app: &AppHandle) {
     }
 }
 
+/// Background thread monitoring active foreground process and target game presence.
+/// AV Safety: Uses `win32::poll_processes` (read-only Toolhelp32 process snapshot iteration).
+/// Never shells out to `tasklist.exe`, `wmic`, or `powershell.exe`, and never opens process handles
+/// with elevated or VM read access (no `PROCESS_ALL_ACCESS` or `PROCESS_VM_READ`).
 pub fn spawn_game_watcher(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last_fg_exe: Option<String> = None;
@@ -143,30 +144,38 @@ pub fn spawn_game_watcher(app: AppHandle) {
     });
 }
 
-fn run_reg(args: &[&str]) {
-    let _ = std::process::Command::new("reg")
-        .args(args)
-        .creation_flags(0x0800_0000)
-        .output();
-}
-
+/// Registers the custom `iris://` URI protocol in user registry (HKCU).
+/// Uses purely native Win32 Registry APIs without spawning `reg.exe` or shell processes.
+/// Performs an initial equality check to avoid redundant registry writes on every launch.
 pub fn register_url_protocol() {
     let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
     if exe.is_empty() {
         return;
     }
-    run_reg(&["add", r"HKCU\Software\Classes\iris", "/ve", "/t", "REG_SZ", "/d", "URL:Iris Protocol", "/f"]);
-    run_reg(&["add", r"HKCU\Software\Classes\iris", "/v", "URL Protocol", "/t", "REG_SZ", "/d", "", "/f"]);
-    run_reg(&["add", r"HKCU\Software\Classes\iris\shell\open\command", "/ve", "/t", "REG_SZ", "/d", &format!("\"{exe}\" \"%1\""), "/f"]);
+    let expected_cmd = format!("\"{exe}\" \"%1\"");
+    // Skip writes if already registered to this executable:
+    if let Some(cur) = win32::reg_get_sz(HKEY_CURRENT_USER, r"Software\Classes\iris\shell\open\command", None) {
+        if cur.eq_ignore_ascii_case(&expected_cmd) {
+            return;
+        }
+    }
+    win32::reg_set_sz(HKEY_CURRENT_USER, r"Software\Classes\iris", None, "URL:Iris Protocol");
+    win32::reg_set_sz(HKEY_CURRENT_USER, r"Software\Classes\iris", Some("URL Protocol"), "");
+    win32::reg_set_sz(HKEY_CURRENT_USER, r"Software\Classes\iris\shell\open\command", None, &expected_cmd);
 }
 
+/// Sets or deletes the Windows startup autostart entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+/// Uses native Win32 Registry API directly without spawning `reg.exe`.
+/// IMPORTANT: Only called when the user explicitly toggles the "Launch on Windows Startup" setting in the UI.
 pub fn set_autostart(enabled: bool) {
-    const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+    const KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
     if enabled {
         let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
-        run_reg(&["add", KEY, "/v", "Iris", "/t", "REG_SZ", "/d", &format!("\"{exe}\" --minimized"), "/f"]);
+        if !exe.is_empty() {
+            win32::reg_set_sz(HKEY_CURRENT_USER, KEY, Some("Iris"), &format!("\"{exe}\" --minimized"));
+        }
     } else {
-        run_reg(&["delete", KEY, "/v", "Iris", "/f"]);
+        win32::reg_delete_val(HKEY_CURRENT_USER, KEY, "Iris");
     }
 }
 

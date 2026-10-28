@@ -129,6 +129,11 @@ pub fn updater_get_status(state: State<'_, UpdaterState>) -> UpdateStatus {
 }
 
 #[tauri::command]
+pub fn get_app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
 pub async fn updater_check(app: AppHandle) -> Result<UpdateStatus, String> {
     Ok(check_for_updates_internal(&app, false).await)
 }

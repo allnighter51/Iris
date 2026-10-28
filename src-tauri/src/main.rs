@@ -57,6 +57,7 @@ fn main() {
             updater::updater_download_and_install,
             updater::updater_restart,
             updater::updater_get_status,
+            updater::get_app_version,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

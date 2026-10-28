@@ -79,7 +79,8 @@ export default function App() {
   const overlayRef = useRef(overlay); overlayRef.current = overlay;
   const liveRef = useRef(live); liveRef.current = live;
   const activePresetIdRef = useRef(activePresetId); activePresetIdRef.current = activePresetId;
-  const appVersionRef = useRef("0.1.2");
+  const [appVersion, setAppVersion] = useState<string>("");
+  const appVersionRef = useRef("");
   const [canvasRes, setCanvasResState] = useState<CanvasRes | null>(() => {
     try { const raw = localStorage.getItem("iris_canvas_res"); return raw ? (JSON.parse(raw) as CanvasRes) : null; }
     catch { return null; }
@@ -124,20 +125,23 @@ export default function App() {
         setMonitors(m);
         if (u) setUpdateStatus(u);
         setReady(true);
-        getVersion().then((ver) => {
-          appVersionRef.current = ver;
-          sendTelemetryEvent({
-            event: "app_launch",
-            appVersion: ver,
-            resolution: `${window.screen.width}x${window.screen.height}`,
-          }, s?.telemetryEnabled ?? true);
-        }).catch(() => {
-          sendTelemetryEvent({
-            event: "app_launch",
-            appVersion: "0.1.2",
-            resolution: `${window.screen.width}x${window.screen.height}`,
-          }, s?.telemetryEnabled ?? true);
-        });
+        const fetchVer = api.getAppVersion().catch(() => getVersion());
+        fetchVer
+          .then((ver) => {
+            setAppVersion(ver);
+            appVersionRef.current = ver;
+            sendTelemetryEvent({
+              event: "app_launch",
+              appVersion: ver,
+              resolution: `${window.screen.width}x${window.screen.height}`,
+            }, s?.telemetryEnabled ?? true);
+          })
+          .catch(() => {
+            sendTelemetryEvent({
+              event: "app_launch",
+              resolution: `${window.screen.width}x${window.screen.height}`,
+            }, s?.telemetryEnabled ?? true);
+          });
       })
       .catch(() => setReady(true));
 
@@ -441,6 +445,7 @@ export default function App() {
             onEquipItem={(item) => { loadItem(item, true); setToast({ title: "● Overlay Equipped", sub: `Equipped "${item.name}" to display` }); }}
             onEquipPreset={(p) => { loadPreset(p, true, true); setToast({ title: "● Loadout Equipped", sub: `Equipped loadout "${p.name}"` }); }}
             updateStatus={updateStatus}
+            appVersion={appVersion}
             onCheckUpdate={() => api.updaterCheck().catch(console.error)}
             onDownloadUpdate={() => api.updaterDownloadAndInstall().catch(console.error)}
             onRestartUpdate={() => api.updaterRestart().catch(console.error)}

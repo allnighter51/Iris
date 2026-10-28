@@ -48,6 +48,7 @@ export const api = {
   updaterDownloadAndInstall: () => invoke<void>("updater_download_and_install"),
   updaterRestart: () => invoke<void>("updater_restart"),
   updaterGetStatus: () => invoke<UpdateStatus>("updater_get_status"),
+  getAppVersion: () => invoke<string>("get_app_version"),
 };
 
 export const assetUrl = (dir: string, file: string) => convertFileSrc(`${dir}\\${file}`);

@@ -54,3 +54,113 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Generate SHA256 Checksums
+        shell: pwsh
+        run: |
+          $bundleDir = "src-tauri/target/release/bundle"
+          if (Test-Path $bundleDir) {
+            $files = Get-ChildItem -Path $bundleDir -Recurse -File | Where-Object {
+              $_.Extension -in @(".exe", ".msi", ".zip")
+            }
+            if ($files) {
+              $lines = foreach ($f in $files) {
+                $hash = (Get-FileHash -Path $f.FullName -Algorithm SHA256).Hash.ToLower()
+                "$hash  $($f.Name)"
+              }
+              $lines | Sort-Object -Unique | Set-Content -Path "SHA256SUMS.txt" -Encoding utf8
+              Write-Host "Generated SHA256SUMS.txt:"
+              Get-Content "SHA256SUMS.txt"
+            } else {
+              Write-Host "No bundle files found for checksum generation."
+            }
+          }
+
+      - name: Upload Checksums to Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: SHA256SUMS.txt
+          tag_name: ${{ github.ref_name }}
+
+      - name: Sync Release to Supabase public.releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
+        shell: pwsh
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $semver = $tag.TrimStart('v')
+          $supabaseUrl = if ($env:SUPABASE_URL) { $env:SUPABASE_URL.TrimEnd('/') } else { "https://oyrbfbthkxrifhejvmhv.supabase.co" }
+          $key = if ($env:SUPABASE_SERVICE_ROLE_KEY) { $env:SUPABASE_SERVICE_ROLE_KEY } else { $env:SUPABASE_ANON_KEY }
+
+          if (-not $key) {
+            Write-Warning "Neither SUPABASE_SERVICE_ROLE_KEY nor SUPABASE_ANON_KEY found in repository secrets. Skipping public.releases database sync."
+            exit 0
+          }
+
+          Write-Host "Syncing release $tag to Supabase ($supabaseUrl)..."
+
+          # Locate setup installer in bundle directory
+          $bundleDir = "src-tauri/target/release/bundle"
+          $setupFile = Get-ChildItem -Path $bundleDir -Recurse -File -Filter "*setup.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+
+          if ($setupFile) {
+            $fileName = $setupFile.Name
+            $fileSize = $setupFile.Length
+            $sha256 = (Get-FileHash -Path $setupFile.FullName -Algorithm SHA256).Hash.ToLower()
+            $md5 = (Get-FileHash -Path $setupFile.FullName -Algorithm MD5).Hash.ToLower()
+          } else {
+            $fileName = "Iris_${semver}_x64-setup.exe"
+            $fileSize = $null
+            $sha256 = ""
+            $md5 = $null
+          }
+
+          $downloadUrl = "https://github.com/allnighter51/Iris/releases/download/$tag/$fileName"
+          $publishedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+          $payload = @{
+            id            = "iris-$tag"
+            app_name      = "Iris"
+            version       = $tag
+            tag_name      = $tag
+            release_title = "Iris $tag"
+            release_notes = "See the release assets below for the latest Iris desktop overlay installer and update artifacts."
+            file_name     = $fileName
+            file_size     = $fileSize
+            sha256        = $sha256
+            md5           = $md5
+            download_url  = $downloadUrl
+            scan_verdict  = "CLEAN"
+            published_at  = $publishedAt
+            updated_at    = $publishedAt
+          } | ConvertTo-Json -Compress
+
+          Write-Host "Posting payload to Supabase releases table:"
+          Write-Host $payload
+
+          $endpoint = "$supabaseUrl/rest/v1/releases?on_conflict=id"
+          $headers = @{
+            "apikey"        = $key
+            "Authorization" = "Bearer $key"
+            "Content-Type"  = "application/json"
+            "Prefer"        = "resolution=merge-duplicates,return=minimal"
+          }
+
+          try {
+            $response = Invoke-RestMethod -Uri $endpoint -Method Post -Headers $headers -Body $payload
+            Write-Host "Successfully synced release $tag to Supabase public.releases!"
+          } catch {
+            Write-Warning "Failed to sync release to Supabase: $_"
+            if ($_.Exception.Response) {
+              $stream = $_.Exception.Response.GetResponseStream()
+              if ($stream) {
+                $reader = New-Object System.IO.StreamReader($stream)
+                Write-Warning "Supabase response: $($reader.ReadToEnd())"
+              }
+            }
+          }

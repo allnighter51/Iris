@@ -115,6 +115,7 @@ interface SettingsProps {
   onEquipItem?: (item: VaultItem) => void;
   onEquipPreset?: (preset: CompositePreset) => void;
   updateStatus?: UpdateStatus;
+  appVersion?: string;
   onCheckUpdate?: () => void;
   onDownloadUpdate?: () => void;
   onRestartUpdate?: () => void;
@@ -123,12 +124,26 @@ interface SettingsProps {
 export function SettingsView({
   settings: s, save, currentForegroundExe, vault, usageStats, activeOverlayItemId,
   isTelemetryPaused, onToggleTelemetry, onResetTelemetry, onEquipItem, onEquipPreset,
-  updateStatus = { status: "idle" }, onCheckUpdate, onDownloadUpdate, onRestartUpdate,
+  updateStatus = { status: "idle" }, appVersion, onCheckUpdate, onDownloadUpdate, onRestartUpdate,
 }: SettingsProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("display");
   const [exe, setExe] = useState(s.targetExe);
   const [needsRestart, setNeedsRestart] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+
+  useEffect(() => {
+    if (activeTab === "system" && updateStatus.status === "idle" && onCheckUpdate) {
+      onCheckUpdate();
+    }
+  }, [activeTab, updateStatus.status, onCheckUpdate]);
+
+  const displayVersion = appVersion
+    || (updateStatus.status === "upToDate" || updateStatus.status === "available"
+      ? updateStatus.currentVersion
+      : updateStatus.status === "downloaded"
+      ? updateStatus.version
+      : "")
+    || "";
 
   const isGameActive = !!currentForegroundExe && KNOWN_GAMES.some((g) => g.exes.some((e) => e.toLowerCase() === currentForegroundExe.toLowerCase()));
   const favOverlay = computeFavoriteOverlay(vault, usageStats, activeOverlayItemId);
@@ -205,10 +220,18 @@ export function SettingsView({
           <div className="settings-sidebar-footer">
             <div className="settings-version-card">
               <div className="settings-version-top">
-                <span className="settings-version-title mono">Iris v0.1.2</span>
+                <span className="settings-version-title mono">{displayVersion ? `Iris v${displayVersion}` : "Iris"}</span>
                 <span
                   className={`settings-update-dot ${updateStatus.status === "available" ? "has-update" : updateStatus.status === "upToDate" ? "ok" : ""}`}
-                  title={updateStatus.status === "available" ? "Update available!" : updateStatus.status === "upToDate" ? "Up to date" : "Standing by"}
+                  title={
+                    updateStatus.status === "available"
+                      ? `Update available: v${updateStatus.version}`
+                      : updateStatus.status === "upToDate"
+                      ? `Up to date (v${updateStatus.currentVersion})`
+                      : updateStatus.status === "checking"
+                      ? "Checking GitHub releases..."
+                      : "Standing by"
+                  }
                 />
               </div>
               <a href="https://github.com/allnighter51/Iris" target="_blank" rel="noreferrer" className="settings-repo-link mono">
@@ -545,9 +568,24 @@ export function SettingsView({
                 </div>
 
                 <SettingsRow title="App Version &amp; Repository" desc="Iris Desktop Overlay utility releases are distributed via GitHub Releases.">
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span className="mono bold" style={{ color: "var(--cyan)" }}>Iris v0.1.2</span>
-                    <a href="https://github.com/allnighter51/Iris" target="_blank" rel="noreferrer" className="tag mono" style={{ textDecoration: "none", cursor: "pointer" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                    <span className="mono bold" style={{ color: "var(--cyan)" }}>
+                      {displayVersion ? `Iris v${displayVersion}` : "Iris"}
+                    </span>
+                    {updateStatus.status === "upToDate" && (
+                      <span className="tag mono ok" style={{ fontSize: "11px" }}>✓ Latest Release</span>
+                    )}
+                    {updateStatus.status === "available" && (
+                      <span className="tag mono" style={{ color: "var(--cyan)", borderColor: "var(--cyan)", fontSize: "11px" }}>
+                        ★ Update Available (v{updateStatus.version})
+                      </span>
+                    )}
+                    {updateStatus.status === "checking" && (
+                      <span className="tag mono" style={{ color: "var(--cyan)", fontSize: "11px" }}>
+                        ⟳ Checking GitHub...
+                      </span>
+                    )}
+                    <a href="https://github.com/allnighter51/Iris/releases" target="_blank" rel="noreferrer" className="tag mono" style={{ textDecoration: "none", cursor: "pointer" }}>
                       github.com/allnighter51/Iris
                     </a>
                   </div>
