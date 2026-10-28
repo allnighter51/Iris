@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, assetUrl } from "../api";
 import { ELEMENT_TAGS, FILTER_GAMES, GAMES, type CompositePreset, type VaultData, type VaultItem } from "../types";
 import { StackThumb } from "./SceneView";
@@ -48,6 +48,7 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
   const [dialog, setDialog] = useState<Dialog>(null);
   const [menu, setMenu] = useState<Menu | null>(null);
   const [carouselIdx, setCarouselIdx] = useState(0);
+  const filmstripRef = useRef<HTMLDivElement>(null);
 
   const [viewMode, setViewModeState] = useState<VaultViewMode>(() => {
     try {
@@ -120,6 +121,22 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
   );
   const safeCarouselIdx = Math.max(0, Math.min(carouselIdx, Math.max(0, allEntries.length - 1)));
   const activeEntry = allEntries[safeCarouselIdx] ?? null;
+
+  const activeW = activeEntry
+    ? (activeEntry.type === "item" ? activeEntry.data.width : activeEntry.data.refW) || 1920
+    : 1920;
+  const activeH = activeEntry
+    ? (activeEntry.type === "item" ? activeEntry.data.height : activeEntry.data.refH) || 1080
+    : 1080;
+
+  // Auto-scroll carousel filmstrip to keep active item in view
+  useEffect(() => {
+    if (viewMode !== "carousel" || !filmstripRef.current) return;
+    const activeEl = filmstripRef.current.children[safeCarouselIdx] as HTMLElement | undefined;
+    if (activeEl) {
+      activeEl.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+    }
+  }, [safeCarouselIdx, viewMode]);
 
   useEffect(() => {
     if (viewMode !== "carousel" || allEntries.length <= 1) return;
@@ -348,7 +365,7 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
         <div className="vault-carousel">
           {activeEntry && (
             <div className="carousel-stage-card card bracket">
-              <div className="carousel-preview checker">
+              <div className="carousel-stage-viewport">
                 {allEntries.length > 1 && (
                   <>
                     <button type="button" className="carousel-nav-btn prev" aria-label="Previous item" onClick={() => setCarouselIdx((i) => (i <= 0 ? allEntries.length - 1 : i - 1))}>◀</button>
@@ -356,30 +373,45 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
                   </>
                 )}
 
-                {activeEntry.type === "item" ? (
-                  <img draggable={false} src={thumbSrc(activeEntry.data)} alt={activeEntry.data.name} />
-                ) : (
-                  <div style={{ width: "80%", height: "80%" }}>
-                    <StackThumb layers={activeEntry.data.layers} vault={vault} refW={activeEntry.data.refW} refH={activeEntry.data.refH} />
-                  </div>
-                )}
-
-                <div className="badges">
-                  <span className="tag mono" style={{ color: "var(--cyan)", borderColor: "var(--cyan)" }}>{safeCarouselIdx + 1} / {allEntries.length}</span>
+                <div
+                  className="carousel-preview checker bracket"
+                  style={{
+                    aspectRatio: `${activeW} / ${activeH}`,
+                    maxWidth: `calc(min(56vh, 520px) * (${activeW} / ${activeH}))`,
+                    maxHeight: "min(56vh, 520px)",
+                    width: "100%",
+                  }}
+                >
                   {activeEntry.type === "item" ? (
-                    <>
-                      <span className="tag mono">{resolutionTag(activeEntry.data.width, activeEntry.data.height)}</span>
-                      <span className={`tag mono ${gameClass(activeEntry.data.game)}`}>{activeEntry.data.game}</span>
-                    </>
+                    <img
+                      draggable={false}
+                      src={assetUrl(vault.assetsDir, activeEntry.data.file)}
+                      alt={activeEntry.data.name}
+                      className="carousel-preview-img"
+                    />
                   ) : (
-                    <>
-                      <span className="stack-badge mono">STACK</span>
-                      {activeEntry.data.game && <span className={`tag mono ${gameClass(activeEntry.data.game)}`}>{activeEntry.data.game}</span>}
-                    </>
+                    <div style={{ width: "100%", height: "100%" }}>
+                      <StackThumb layers={activeEntry.data.layers} vault={vault} refW={activeEntry.data.refW} refH={activeEntry.data.refH} />
+                    </div>
                   )}
-                </div>
 
-                {activeEntry.type === "item" && activeId === activeEntry.data.id && <span className="live-dot mono">● ACTIVE ON SCREEN</span>}
+                  <div className="badges">
+                    <span className="tag mono" style={{ color: "var(--cyan)", borderColor: "var(--cyan)" }}>{safeCarouselIdx + 1} / {allEntries.length}</span>
+                    {activeEntry.type === "item" ? (
+                      <>
+                        <span className="tag mono">{resolutionTag(activeEntry.data.width, activeEntry.data.height)}</span>
+                        <span className={`tag mono ${gameClass(activeEntry.data.game)}`}>{activeEntry.data.game}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="stack-badge mono">STACK</span>
+                        {activeEntry.data.game && <span className={`tag mono ${gameClass(activeEntry.data.game)}`}>{activeEntry.data.game}</span>}
+                      </>
+                    )}
+                  </div>
+
+                  {activeEntry.type === "item" && activeId === activeEntry.data.id && <span className="live-dot mono">● ACTIVE ON SCREEN</span>}
+                </div>
               </div>
 
               <div className="carousel-stage-bar">
@@ -420,7 +452,7 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
             </div>
           )}
 
-          <div className="carousel-reel-wrap">
+          <div ref={filmstripRef} className="carousel-reel-wrap">
             {allEntries.map((entry, idx) => (
               <div
                 key={entry.data.id}
