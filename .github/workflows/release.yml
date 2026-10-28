@@ -94,7 +94,7 @@ jobs:
         run: |
           $tag = "${{ github.ref_name }}"
           $semver = $tag.TrimStart('v')
-          $supabaseUrl = if ($env:SUPABASE_URL) { $env:SUPABASE_URL.TrimEnd('/') } else { "https://oyrbfbthkxrifhejvmhv.supabase.co" }
+          $supabaseUrl = if ($env:SUPABASE_URL) { $env:SUPABASE_URL.TrimEnd('/') } else { "https://yvlnnnuwkbxtpzlaoxko.supabase.co" }
           $key = if ($env:SUPABASE_SERVICE_ROLE_KEY) { $env:SUPABASE_SERVICE_ROLE_KEY } else { $env:SUPABASE_ANON_KEY }
 
           if (-not $key) {

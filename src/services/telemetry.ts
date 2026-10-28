@@ -8,9 +8,8 @@
  * - Opt-out honored: If user disables telemetry in Settings, all network calls immediately no-op.
  */
 
-const SUPABASE_URL = "https://oyrbfbthkxrifhejvmhv.supabase.co";
-const ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im95cmJmYnRoa3hyaWZoZWp2bWh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg0MDI3NzQsImV4cCI6MjEwMzk3ODc3NH0.Qnr6vUGFMFVSw0VqQKT1vi2Lpjvsu361IqLGSYrp_5k";
+const SUPABASE_URL = "https://yvlnnnuwkbxtpzlaoxko.supabase.co";
+const ANON_KEY = "sb_publishable_7mkuBkX4kLv6cT4H_VTiFg_hzylMPUn";
 
 const CLIENT_ID_KEY = "iris_anon_client_id";
 
