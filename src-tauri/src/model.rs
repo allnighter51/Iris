@@ -145,6 +145,18 @@ fn default_true() -> bool {
     true
 }
 
+fn default_target_monitor_mode() -> String {
+    "manual".into()
+}
+
+fn default_aspect_scaling_mode() -> String {
+    "contain-16-9".into()
+}
+
+fn default_watcher_poll_ms() -> u64 {
+    500
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -165,6 +177,14 @@ pub struct Settings {
     pub check_updates_on_startup: bool,
     #[serde(default = "default_true")]
     pub telemetry_enabled: bool,
+    #[serde(default = "default_target_monitor_mode")]
+    pub target_monitor_mode: String,
+    #[serde(default = "default_aspect_scaling_mode")]
+    pub aspect_scaling_mode: String,
+    #[serde(default = "default_watcher_poll_ms")]
+    pub watcher_poll_ms: u64,
+    #[serde(default)]
+    pub custom_target_exes: Vec<String>,
 }
 
 impl Default for Settings {
@@ -186,6 +206,10 @@ impl Default for Settings {
             layer_hotkeys: HashMap::new(),
             check_updates_on_startup: true,
             telemetry_enabled: true,
+            target_monitor_mode: "manual".into(),
+            aspect_scaling_mode: "contain-16-9".into(),
+            watcher_poll_ms: 500,
+            custom_target_exes: Vec::new(),
         }
     }
 }

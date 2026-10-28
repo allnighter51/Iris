@@ -16,6 +16,7 @@ pub struct OverlayPayload {
     pub monitor_w: i32,
     pub monitor_h: i32,
     pub low_res: bool,
+    pub aspect_scaling_mode: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -56,11 +57,34 @@ fn monitor_rect(app: &AppHandle, idx: usize) -> (i32, i32, i32, i32) {
     }
 }
 
+pub fn active_monitor_rect(app: &AppHandle, st: &AppState) -> (i32, i32, i32, i32) {
+    let (monitor_mode, manual_idx) = {
+        let s = st.settings();
+        let o = st.overlay();
+        (s.target_monitor_mode.clone(), o.monitor)
+    };
+
+    if monitor_mode == "follow-game" {
+        if let Some((cx, cy)) = win32::get_foreground_window_center() {
+            let mons = app.available_monitors().unwrap_or_default();
+            for m in &mons {
+                let p = m.position();
+                let s = m.size();
+                let (x, y, w, h) = (p.x, p.y, s.width as i32, s.height as i32);
+                if cx >= x && cx < x + w && cy >= y && cy < y + h {
+                    return (x, y, w, h);
+                }
+            }
+        }
+    }
+    monitor_rect(app, manual_idx)
+}
+
 fn build_payload(app: &AppHandle, st: &AppState) -> (OverlayPayload, (i32, i32, i32, i32), bool, bool) {
     let o = st.overlay().clone();
     let s = st.settings().clone();
     let game = st.game_running.load(Ordering::Relaxed);
-    let rect = monitor_rect(app, o.monitor);
+    let rect = active_monitor_rect(app, st);
     let visible = o.enabled && o.has_content() && (s.target_mode != "game" || game);
     let payload = OverlayPayload {
         state: o,
@@ -68,6 +92,7 @@ fn build_payload(app: &AppHandle, st: &AppState) -> (OverlayPayload, (i32, i32, 
         monitor_w: rect.2,
         monitor_h: rect.3,
         low_res: s.low_resource,
+        aspect_scaling_mode: s.aspect_scaling_mode,
     };
     (payload, rect, game, s.hide_from_capture)
 }

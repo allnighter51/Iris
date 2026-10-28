@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, assetUrl } from "../api";
-import { ELEMENT_TAGS, GAME_EXES, KNOWN_GAMES, ROLES, type CompositePreset, type Settings, type UpdateStatus, type VaultData, type VaultItem } from "../types";
+import { ELEMENT_TAGS, GAME_EXES, KNOWN_GAMES, ROLES, type CompositePreset, type MonitorInfo, type Settings, type UpdateStatus, type VaultData, type VaultItem } from "../types";
 import { computeFavoriteOverlay, formatDuration, type UsageStats } from "../usage";
 import { gameClass } from "../util";
 import { StackThumb } from "./SceneView";
@@ -119,17 +119,57 @@ interface SettingsProps {
   onCheckUpdate?: () => void;
   onDownloadUpdate?: () => void;
   onRestartUpdate?: () => void;
+  monitors?: MonitorInfo[];
+  currentMonitor?: number;
+  onSelectMonitor?: (idx: number) => void;
 }
 
 export function SettingsView({
   settings: s, save, currentForegroundExe, vault, usageStats, activeOverlayItemId,
   isTelemetryPaused, onToggleTelemetry, onResetTelemetry, onEquipItem, onEquipPreset,
   updateStatus = { status: "idle" }, appVersion, onCheckUpdate, onDownloadUpdate, onRestartUpdate,
+  monitors = [], currentMonitor = 0, onSelectMonitor,
 }: SettingsProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("display");
   const [exe, setExe] = useState(s.targetExe);
   const [needsRestart, setNeedsRestart] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [lastExternalExe, setLastExternalExe] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem("iris_last_external_exe") || null;
+    } catch {
+      return null;
+    }
+  });
+  const [customExeInput, setCustomExeInput] = useState("");
+
+  useEffect(() => {
+    if (currentForegroundExe) {
+      const lower = currentForegroundExe.toLowerCase().trim();
+      if (lower && lower !== "iris.exe" && lower !== "iris" && !lower.includes("iris.exe")) {
+        setLastExternalExe(currentForegroundExe);
+        try {
+          localStorage.setItem("iris_last_external_exe", currentForegroundExe);
+        } catch { /* ignore */ }
+      }
+    }
+  }, [currentForegroundExe]);
+
+  const customTargets = s.customTargetExes ?? [];
+
+  const addCustomTarget = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const exists = customTargets.some((t) => t.toLowerCase() === trimmed.toLowerCase());
+    if (!exists) {
+      save({ customTargetExes: [...customTargets, trimmed] });
+    }
+    setCustomExeInput("");
+  };
+
+  const removeCustomTarget = (name: string) => {
+    save({ customTargetExes: customTargets.filter((t) => t.toLowerCase() !== name.toLowerCase()) });
+  };
 
   useEffect(() => {
     if (activeTab === "system" && updateStatus.status === "idle" && onCheckUpdate) {
@@ -145,7 +185,9 @@ export function SettingsView({
       : "")
     || "";
 
-  const isGameActive = !!currentForegroundExe && KNOWN_GAMES.some((g) => g.exes.some((e) => e.toLowerCase() === currentForegroundExe.toLowerCase()));
+  const isBuiltinGame = !!currentForegroundExe && KNOWN_GAMES.some((g) => g.exes.some((e) => e.toLowerCase() === currentForegroundExe.toLowerCase()));
+  const isCustomGame = !!currentForegroundExe && customTargets.some((e) => e.toLowerCase() === currentForegroundExe.toLowerCase());
+  const isGameActive = isBuiltinGame || isCustomGame;
   const favOverlay = computeFavoriteOverlay(vault, usageStats, activeOverlayItemId);
   const vaultItemCount = vault?.items.length ?? 0;
   const effectiveUploads = Math.max(usageStats?.totalUploads ?? 0, vaultItemCount);
@@ -278,6 +320,68 @@ export function SettingsView({
                 </SettingsRow>
               )}
 
+              <SettingsRow
+                title="Target Display & Monitor Routing"
+                desc="Choose which physical display renders the overlay, or automatically follow the active game window."
+              >
+                <div className="monitor-routing-ctrl">
+                  <select
+                    className="input"
+                    value={s.targetMonitorMode === "follow-game" ? "follow-game" : String(currentMonitor)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "follow-game") {
+                        save({ targetMonitorMode: "follow-game" });
+                      } else {
+                        const idx = parseInt(val, 10);
+                        save({ targetMonitorMode: "manual" });
+                        onSelectMonitor?.(idx);
+                      }
+                    }}
+                  >
+                    <option value="follow-game">⚡ Follow Game Monitor (Auto-route)</option>
+                    {monitors.length > 0 ? (
+                      monitors.map((m) => (
+                        <option key={m.index} value={String(m.index)}>
+                          {m.name || `Display ${m.index + 1}`}: {m.width}x{m.height}{m.refreshHz ? ` @ ${m.refreshHz}Hz` : ""}{m.index === 0 ? " (Primary)" : ""}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="0">Display 1 (Primary)</option>
+                    )}
+                  </select>
+                </div>
+              </SettingsRow>
+
+              <SettingsRow
+                title="Aspect Ratio & Ultrawide Alignment"
+                desc="Controls how 16:9 HUD overlays align on 21:9 ultrawide or mismatched monitor resolutions."
+              >
+                <div className="seg">
+                  <button
+                    type="button"
+                    className={(s.aspectScalingMode ?? "contain-16-9") === "contain-16-9" ? "active" : ""}
+                    onClick={() => save({ aspectScalingMode: "contain-16-9" })}
+                  >
+                    Center 16:9 Safe-Zone
+                  </button>
+                  <button
+                    type="button"
+                    className={s.aspectScalingMode === "fill-screen" ? "active" : ""}
+                    onClick={() => save({ aspectScalingMode: "fill-screen" })}
+                  >
+                    Stretch to Screen
+                  </button>
+                  <button
+                    type="button"
+                    className={s.aspectScalingMode === "native-1-1" ? "active" : ""}
+                    onClick={() => save({ aspectScalingMode: "native-1-1" })}
+                  >
+                    1:1 Pixel Native
+                  </button>
+                </div>
+              </SettingsRow>
+
               <SettingsRow title="Hide from Capture (OBS / Stream Mode)" desc="ON: Only you see the overlay on your screen (WDA_EXCLUDEFROMCAPTURE). OFF: Overlay also appears in OBS Game and Display capture.">
                 <Toggle checked={s.hideFromCapture} onChange={(v) => save({ hideFromCapture: v })} />
               </SettingsRow>
@@ -287,12 +391,135 @@ export function SettingsView({
               <SettingsRow title="Auto-Hide when Tabbed Out" desc="Conceals overlay when tabbed into Discord, Chrome, or Desktop; reappears instantly when you focus back on the game.">
                 <Toggle checked={s.autoHideUnfocused ?? false} onChange={(v) => save({ autoHideUnfocused: v })} />
               </SettingsRow>
-              <SettingsRow title="Focused Foreground Process" desc="Live hardware readout of the currently focused Windows application.">
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span className="mono small" style={{ color: "var(--cyan)" }}>{currentForegroundExe || "desktop / idle"}</span>
-                  <span className={`tag mono ${isGameActive ? "ok" : ""}`}>{isGameActive ? "● GAME DETECTED" : "○ BACKGROUND"}</span>
+
+              <SettingsRow
+                title="Detection & Alt-Tab Response Speed"
+                desc="Controls how frequently Iris checks foreground window focus for Auto-Attach and Auto-Hide."
+              >
+                <div className="seg">
+                  <button
+                    type="button"
+                    className={(s.watcherPollMs ?? 500) === 250 ? "active" : ""}
+                    onClick={() => save({ watcherPollMs: 250 })}
+                  >
+                    Instant (250ms)
+                  </button>
+                  <button
+                    type="button"
+                    className={(s.watcherPollMs ?? 500) === 500 ? "active" : ""}
+                    onClick={() => save({ watcherPollMs: 500 })}
+                  >
+                    Balanced (500ms)
+                  </button>
+                  <button
+                    type="button"
+                    className={(s.watcherPollMs ?? 500) === 1500 ? "active" : ""}
+                    onClick={() => save({ watcherPollMs: 1500 })}
+                  >
+                    Eco (1.5s)
+                  </button>
                 </div>
               </SettingsRow>
+
+              <SettingsRow
+                title="Focused Foreground Process"
+                desc="Live hardware readout of the currently focused Windows application with 1-click custom target tracking."
+              >
+                <div className="target-inspector">
+                  <div className="target-inspector-live">
+                    <div className="target-inspector-left">
+                      <span className="mono small live-exe-name">{currentForegroundExe || "desktop / idle"}</span>
+                      <span className={`tag mono ${isGameActive ? "ok" : ""}`}>{isGameActive ? "● GAME DETECTED" : "○ BACKGROUND"}</span>
+                    </div>
+
+                    {lastExternalExe && (
+                      <div className="last-external-pill-box">
+                        <span className="last-external-label">Last External:</span>
+                        <span className="last-external-val mono">{lastExternalExe}</span>
+                        {!customTargets.some((x) => x.toLowerCase() === lastExternalExe.toLowerCase()) && (
+                          <button
+                            type="button"
+                            className="btn outline small track-btn"
+                            title={`Add ${lastExternalExe} to target game pool`}
+                            onClick={() => addCustomTarget(lastExternalExe)}
+                          >
+                            + Track .exe
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="custom-target-input-row">
+                    <input
+                      type="text"
+                      className="input mono small custom-exe-input"
+                      placeholder="Add custom target (e.g. cs2.exe)..."
+                      value={customExeInput}
+                      onChange={(e) => setCustomExeInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          addCustomTarget(customExeInput);
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn outline small"
+                      disabled={!customExeInput.trim()}
+                      onClick={() => addCustomTarget(customExeInput)}
+                    >
+                      + Add Target
+                    </button>
+                  </div>
+
+                  {customTargets.length > 0 && (
+                    <div className="custom-chips-row">
+                      <span className="custom-chips-heading">Tracked Custom Exes:</span>
+                      <div className="custom-chips-wrap">
+                        {customTargets.map((target) => (
+                          <span key={target} className="custom-exe-chip mono">
+                            <span className="chip-text">{target}</span>
+                            <button
+                              type="button"
+                              className="chip-del-btn"
+                              title={`Remove ${target}`}
+                              onClick={() => removeCustomTarget(target)}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </SettingsRow>
+
+              <div className="hardware-status-strip">
+                <div className="hw-badge">
+                  <span className="hw-dot active" />
+                  <span className="hw-title">Click-Through Lock:</span>
+                  <span className="hw-val active mono">ACTIVE (WS_EX_TRANSPARENT)</span>
+                </div>
+
+                <div className="hw-badge">
+                  <span className={`hw-dot ${s.hideFromCapture ? "active" : "muted"}`} />
+                  <span className="hw-title">Stream Capture Shield:</span>
+                  <span className={`hw-val mono ${s.hideFromCapture ? "active" : "muted"}`}>
+                    {s.hideFromCapture ? "ON (WDA_EXCLUDEFROMCAPTURE)" : "OFF (Visible)"}
+                  </span>
+                </div>
+
+                <div className="hw-badge">
+                  <span className="hw-dot info" />
+                  <span className="hw-title">Active Target Pool:</span>
+                  <span className="hw-val mono info">
+                    {KNOWN_GAMES.reduce((acc, g) => acc + g.exes.length, 0) + customTargets.length} Exes
+                  </span>
+                </div>
+              </div>
             </div>
           )}
 

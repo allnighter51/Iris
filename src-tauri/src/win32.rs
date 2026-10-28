@@ -4,7 +4,7 @@
 use std::ffi::c_void;
 use std::mem::size_of;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{CloseHandle, HWND};
+use windows::Win32::Foundation::{CloseHandle, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{EnumDisplaySettingsW, DEVMODEW, ENUM_CURRENT_SETTINGS};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
@@ -109,10 +109,32 @@ fn eq_utf16_ignore_ascii_case(wide: &[u16], target: &str) -> bool {
         .all(|(&w, b)| w <= 0x7F && (w as u8).eq_ignore_ascii_case(&b))
 }
 
+/// Calculates the center coordinates (cx, cy) of the currently focused foreground window.
+pub fn get_foreground_window_center() -> Option<(i32, i32)> {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return None;
+        }
+        let mut rect = RECT::default();
+        if GetWindowRect(fg, &mut rect).is_ok() {
+            let cx = (rect.left + rect.right) / 2;
+            let cy = (rect.top + rect.bottom) / 2;
+            Some((cx, cy))
+        } else {
+            None
+        }
+    }
+}
+
 /// Single-pass kernel snapshot that resolves both:
 /// 1) The foreground window's executable name (`None` if no foreground window)
-/// 2) Whether `target_exe` is currently running anywhere on the system
-pub fn poll_processes(target_exe: &str, check_target: bool) -> (Option<String>, bool) {
+/// 2) Whether `target_exe` or any `custom_targets` are currently running anywhere on the system
+pub fn poll_processes(
+    target_exe: &str,
+    custom_targets: &[String],
+    check_target: bool,
+) -> (Option<String>, bool) {
     let target = target_exe.trim();
     unsafe {
         let fg_hwnd = GetForegroundWindow();
@@ -121,7 +143,7 @@ pub fn poll_processes(target_exe: &str, check_target: bool) -> (Option<String>, 
             let _ = GetWindowThreadProcessId(fg_hwnd, Some(&mut fg_pid));
         }
         let want_fg = fg_pid != 0;
-        let want_target = check_target && !target.is_empty();
+        let want_target = check_target && (!target.is_empty() || !custom_targets.is_empty());
 
         if !want_fg && !want_target {
             return (None, false);
@@ -138,13 +160,26 @@ pub fn poll_processes(target_exe: &str, check_target: bool) -> (Option<String>, 
         let mut fg_name: Option<String> = None;
         let mut target_running = false;
 
+        let is_target = |wide: &[u16]| -> bool {
+            if !target.is_empty() && eq_utf16_ignore_ascii_case(wide, target) {
+                return true;
+            }
+            for c in custom_targets {
+                let ct = c.trim();
+                if !ct.is_empty() && eq_utf16_ignore_ascii_case(wide, ct) {
+                    return true;
+                }
+            }
+            false
+        };
+
         if Process32FirstW(snap, &mut entry).is_ok() {
             loop {
                 if want_fg && fg_name.is_none() && entry.th32ProcessID == fg_pid {
                     let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
                     fg_name = Some(String::from_utf16_lossy(&entry.szExeFile[..len]));
                 }
-                if want_target && !target_running && eq_utf16_ignore_ascii_case(&entry.szExeFile, target) {
+                if want_target && !target_running && is_target(&entry.szExeFile) {
                     target_running = true;
                 }
                 if (!want_fg || fg_name.is_some()) && (!want_target || target_running) {

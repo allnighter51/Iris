@@ -116,6 +116,10 @@ export interface Settings {
   startWithWindows: boolean; closeToTray: boolean; hardwareAcceleration: boolean;
   lowResource: boolean; layerHotkeys: Record<string, string>; checkUpdatesOnStartup?: boolean;
   telemetryEnabled?: boolean;
+  targetMonitorMode?: "manual" | "follow-game";
+  aspectScalingMode?: "contain-16-9" | "fill-screen" | "native-1-1";
+  watcherPollMs?: number;
+  customTargetExes?: string[];
 }
 
 export type UpdateStatus =
@@ -136,7 +140,14 @@ export const DEFAULT_OVERLAY: OverlayState = {
   enabled: false, itemId: null, path: null, width: 0, height: 0, transform: DEFAULT_TRANSFORM, monitor: 0, scene: [],
 };
 
-export interface OverlayPayload { state: OverlayState; visible: boolean; monitorW: number; monitorH: number; lowRes: boolean; }
+export interface OverlayPayload {
+  state: OverlayState;
+  visible: boolean;
+  monitorW: number;
+  monitorH: number;
+  lowRes: boolean;
+  aspectScalingMode?: "contain-16-9" | "fill-screen" | "native-1-1";
+}
 export interface OverlayStatus { enabled: boolean; visible: boolean; gameRunning: boolean; }
 export interface MonitorInfo { index: number; name: string; width: number; height: number; x: number; y: number; scale: number; refreshHz: number; }
 export interface KnownGame { name: string; label: string; exes: string[]; color: string; }

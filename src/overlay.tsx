@@ -66,13 +66,28 @@ function Overlay() {
       c.height = H;
       const ctx = c.getContext("2d")!;
       ctx.imageSmoothingQuality = "high";
+
+      const aspectMode = p.aspectScalingMode || "contain-16-9";
+      let scaleX = 1;
+      let scaleY = 1;
+
+      if (aspectMode === "fill-screen" && H > 0) {
+        const targetAspect = 16 / 9;
+        const currentAspect = W / H;
+        if (currentAspect > targetAspect + 0.01) {
+          scaleX = currentAspect / targetAspect;
+        } else if (currentAspect < targetAspect - 0.01) {
+          scaleY = targetAspect / currentAspect;
+        }
+      }
+
       // layers arrive back-to-front
       layers.forEach((l, i) => {
         const img = imgs[i];
         if (!img) return;
         const t = l.transform;
-        const w = (l.width * t.scale) / 100;
-        const h = (l.height * t.scale) / 100;
+        const w = ((l.width * t.scale) / 100) * scaleX;
+        const h = ((l.height * t.scale) / 100) * scaleY;
         const f: string[] = [];
         if (!p.lowRes) {
           if (t.hue) f.push(`hue-rotate(${t.hue}deg)`);
@@ -88,7 +103,7 @@ function Overlay() {
         const vh = Math.max(0.01, 1 - (fx.cropT + fx.cropB) / 100);
         ctx.globalCompositeOperation = (fx.blend && fx.blend !== "normal" ? fx.blend : "source-over") as GlobalCompositeOperation;
         ctx.save();
-        ctx.translate(W / 2 + t.x, H / 2 + t.y);
+        ctx.translate(W / 2 + t.x * scaleX, H / 2 + t.y * scaleY);
         ctx.scale(fx.flipX ? -1 : 1, fx.flipY ? -1 : 1);
         ctx.drawImage(
           img,

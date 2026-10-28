@@ -449,6 +449,9 @@ export default function App() {
             onCheckUpdate={() => api.updaterCheck().catch(console.error)}
             onDownloadUpdate={() => api.updaterDownloadAndInstall().catch(console.error)}
             onRestartUpdate={() => api.updaterRestart().catch(console.error)}
+            monitors={monitors}
+            currentMonitor={overlay.monitor}
+            onSelectMonitor={(idx) => setOverlay((o) => ({ ...o, monitor: idx }))}
           />
         )}
       </main>

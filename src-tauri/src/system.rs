@@ -98,16 +98,26 @@ pub fn spawn_game_watcher(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last_fg_exe: Option<String> = None;
         let mut last_shown: Option<bool> = None;
+        let mut last_rect: Option<(i32, i32, i32, i32)> = None;
         loop {
-            let (mode, exe, low, enabled, auto_hide) = {
+            let (mode, exe, low, enabled, auto_hide, poll_ms, custom_exes, monitor_mode) = {
                 let st = app.state::<AppState>();
                 let s = st.settings().clone();
                 let o = st.overlay();
                 let on = o.enabled && o.has_content();
-                (s.target_mode, s.target_exe, s.low_resource, on, s.auto_hide_unfocused)
+                (
+                    s.target_mode,
+                    s.target_exe,
+                    s.low_resource,
+                    on,
+                    s.auto_hide_unfocused,
+                    s.watcher_poll_ms,
+                    s.custom_target_exes,
+                    s.target_monitor_mode,
+                )
             };
 
-            let (fg, target_running) = win32::poll_processes(&exe, mode == "game");
+            let (fg, target_running) = win32::poll_processes(&exe, &custom_exes, mode == "game");
             if fg != last_fg_exe {
                 let _ = app.emit_to("main", "foreground-process-changed", &fg);
                 last_fg_exe = fg.clone();
@@ -115,12 +125,25 @@ pub fn spawn_game_watcher(app: AppHandle) {
 
             let st = app.state::<AppState>();
             let running = mode == "game" && target_running;
-            if st.game_running.swap(running, Ordering::Relaxed) != running {
+            let current_rect = if monitor_mode == "follow-game" {
+                Some(overlay::active_monitor_rect(&app, &st))
+            } else {
+                None
+            };
+
+            let monitor_changed = monitor_mode == "follow-game" && current_rect != last_rect;
+            if monitor_changed {
+                last_rect = current_rect;
+            }
+
+            if st.game_running.swap(running, Ordering::Relaxed) != running || (enabled && monitor_changed) {
                 overlay::refresh(&app);
             } else if enabled {
                 let is_unfocused_non_game = auto_hide && mode == "game" && fg.as_deref().map_or(false, |f| {
                     let f_lower = f.to_ascii_lowercase();
                     f_lower != "iris.exe"
+                        && !f_lower.eq_ignore_ascii_case(&exe)
+                        && !custom_exes.iter().any(|c| f_lower.eq_ignore_ascii_case(c.trim()))
                         && ["discord", "chrome", "edge", "firefox", "explorer", "code", "spotify"]
                             .iter()
                             .any(|k| f_lower.contains(k))
@@ -139,7 +162,8 @@ pub fn spawn_game_watcher(app: AppHandle) {
                     }
                 }
             }
-            std::thread::sleep(Duration::from_millis(if low { 1500 } else { 600 }));
+            let sleep_ms = if low { 1500 } else { poll_ms.clamp(100, 3000) };
+            std::thread::sleep(Duration::from_millis(sleep_ms));
         }
     });
 }

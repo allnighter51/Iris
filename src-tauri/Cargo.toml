@@ -1,6 +1,6 @@
 [package]
 name = "iris"
-version = "0.1.3"
+version = "0.1.4"
 description = "Iris Desktop HUD & Stream Overlay Manager"
 authors = ["VeeVisuals <support@veevisuals.art>"]
 homepage = "https://github.com/allnighter51/Iris"
@@ -30,7 +30,8 @@ windows = { version = "0.61", features = [
 ] }
 
 [profile.release]
-opt-level = 2
-lto = "thin"
+opt-level = "z"
+lto = true
 codegen-units = 1
-strip = false
+panic = "abort"
+strip = true

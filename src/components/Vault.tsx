@@ -101,7 +101,7 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
   const visibleGames = FILTER_GAMES.filter((g) => !hiddenGames.includes(g));
   const pills = ["All", "Favorites", ...visibleGames, ...vault.folders];
 
-  useEffect(() => { if (!pills.includes(filter)) setFilter("All"); });
+  useEffect(() => { if (!pills.includes(filter)) setFilter("All"); }, [pills, filter]);
 
   const toggleFavorite = async (item: VaultItem) => setVault(await api.updateItem(item.id, { favorite: !item.favorite }));
   const thumbSrc = (item: VaultItem) => assetUrl(item.thumb ? vault.thumbsDir : vault.assetsDir, item.thumb ?? item.file);
@@ -221,7 +221,6 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
                   <StackThumb layers={p.layers} vault={vault} refW={p.refW} refH={p.refH} />
                   <div className="badges">
                     <span className="stack-badge mono">STACK</span>
-                    {p.game && <span className={`tag mono ${gameClass(p.game)}`}>{p.game}</span>}
                   </div>
                   {isSel && (
                     <div className="quick" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
@@ -261,10 +260,6 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
                   >
                     {item.favorite ? "★" : "☆"}
                   </button>
-                  <div className="badges">
-                    <span className="tag mono">{resolutionTag(item.width, item.height)}</span>
-                    <span className={`tag mono ${gameClass(item.game)}`}>{item.game}</span>
-                  </div>
                   {activeId === item.id && <span className="live-dot mono">● ACTIVE</span>}
                   {isSel && (
                     <div className="quick" onClick={(e) => e.stopPropagation()} onDoubleClick={(e) => e.stopPropagation()}>
@@ -281,7 +276,10 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
                     <span className={`chip ${gameClass(item.game)}`}>{item.game}</span>
                     {item.tag && <span className="chip folder">{tagLabel(item.tag)}</span>}
                     {item.folder && <span className="chip folder">&#x25B8; {item.folder}</span>}
-                    <span className="dims mono">{item.width}x{item.height}</span>
+                    <span className="vshowcase-res">
+                      <span className="dims mono">{item.width}x{item.height}</span>
+                      <span className="tag mono">{resolutionTag(item.width, item.height)}</span>
+                    </span>
                   </div>
                 </div>
               </article>
@@ -302,7 +300,6 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
                 <StackThumb layers={p.layers} vault={vault} refW={p.refW} refH={p.refH} />
                 <div className="badges">
                   <span className="stack-badge mono">STACK</span>
-                  {p.game && <span className={`tag mono ${gameClass(p.game)}`}>{p.game}</span>}
                 </div>
               </div>
               <div className="vshowcase-body">
@@ -338,10 +335,6 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
                 >
                   {item.favorite ? "★" : "☆"}
                 </button>
-                <div className="badges">
-                  <span className="tag mono">{resolutionTag(item.width, item.height)}</span>
-                  <span className={`tag mono ${gameClass(item.game)}`}>{item.game}</span>
-                </div>
                 {activeId === item.id && <span className="live-dot mono">● ACTIVE</span>}
               </div>
               <div className="vshowcase-body">
@@ -350,7 +343,10 @@ export function Vault({ vault, setVault, filter, setFilter, activeId, onLoad, on
                   <span className={`chip ${gameClass(item.game)}`}>{item.game}</span>
                   {item.tag && <span className="chip folder">{tagLabel(item.tag)}</span>}
                   {item.folder && <span className="chip folder">&#x25B8; {item.folder}</span>}
-                  <span className="dims mono">{item.width} × {item.height}</span>
+                  <span className="vshowcase-res">
+                    <span className="dims mono">{item.width} × {item.height}</span>
+                    <span className="tag mono">{resolutionTag(item.width, item.height)}</span>
+                  </span>
                 </div>
                 <div className="vshowcase-actions">
                   <button className="btn small primary" onClick={() => onLoad(item)}>Equip / Display</button>
