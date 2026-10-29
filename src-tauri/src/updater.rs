@@ -56,6 +56,22 @@ fn emit_status(app: &AppHandle, status: UpdateStatus) -> UpdateStatus {
     status
 }
 
+fn build_updater(
+    app: &AppHandle,
+) -> Result<tauri_plugin_updater::Updater, tauri_plugin_updater::Error> {
+    let mut builder = app.updater_builder();
+    #[cfg(target_os = "windows")]
+    {
+        builder = builder.target("windows-x86_64-nsis");
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                builder = builder.installer_arg(format!("/D={}", dir.display()));
+            }
+        }
+    }
+    builder.build()
+}
+
 /// Non-blocking startup update check on a background thread.
 pub fn check_on_startup(app: AppHandle) {
     std::thread::spawn(move || {
@@ -70,7 +86,7 @@ pub async fn check_for_updates_internal(app: &AppHandle, silent: bool) -> Update
     let current_version = app.package_info().version.to_string();
     emit_status(app, UpdateStatus::Checking);
 
-    let updater = match app.updater() {
+    let updater = match build_updater(app) {
         Ok(u) => u,
         Err(e) => {
             return emit_status(
@@ -140,7 +156,7 @@ pub async fn updater_check(app: AppHandle) -> Result<UpdateStatus, String> {
 
 #[tauri::command]
 pub async fn updater_download_and_install(app: AppHandle) -> Result<UpdateStatus, String> {
-    let updater = app.updater().map_err(|e| e.to_string())?;
+    let updater = build_updater(&app).map_err(|e| e.to_string())?;
     let update = updater
         .check()
         .await
