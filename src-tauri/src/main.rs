@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod games;
 mod model;
 mod overlay;
 mod system;
@@ -50,7 +51,9 @@ fn main() {
             vault::preset_delete,
             overlay::overlay_apply,
             overlay::overlay_get,
+            overlay::overlay_get_fse_status,
             system::list_monitors,
+            system::list_running_processes,
             system::settings_get,
             system::settings_save,
             updater::updater_check,
@@ -65,6 +68,7 @@ fn main() {
             let _ = system::build_tray(&handle);
             system::register_hotkeys(&handle);
             system::register_url_protocol();
+            system::init_focus_hook(handle.clone());
             system::spawn_game_watcher(handle.clone());
 
             let check_startup = app.state::<AppState>().settings().check_updates_on_startup;

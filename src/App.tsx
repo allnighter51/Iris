@@ -4,7 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { api } from "./api";
 import {
   DEFAULT_OVERLAY, DEFAULT_TRANSFORM, ELEMENT_TAGS, KNOWN_GAMES,
-  type CanvasRes, type CompositePreset, type Layer, type MonitorInfo,
+  type CanvasRes, type CompositePreset, type FseStatus, type Layer, type MonitorInfo,
   type OverlayState, type OverlayStatus, type Settings, type Tab,
   type UpdateStatus, type VaultData, type VaultItem,
 } from "./types";
@@ -28,6 +28,7 @@ export default function App() {
   const [status, setStatus] = useState<OverlayStatus>({ enabled: false, visible: false, gameRunning: false });
   const [ready, setReady] = useState(false);
   const [currentForegroundExe, setCurrentForegroundExe] = useState<string | null>(null);
+  const [fseStatus, setFseStatus] = useState<FseStatus>({ isFse: false, gameExe: null });
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ status: "idle" });
   const [toast, setToast] = useState<{ title: string; sub: string; actionLabel?: string; onAction?: () => void } | null>(null);
 
@@ -124,6 +125,7 @@ export default function App() {
         setSettings(s);
         setMonitors(m);
         if (u) setUpdateStatus(u);
+        api.overlayGetFseStatus().then(setFseStatus).catch(() => {});
         setReady(true);
         const fetchVer = api.getAppVersion().catch(() => getVersion());
         fetchVer
@@ -159,6 +161,7 @@ export default function App() {
         }),
       ),
       listen<UpdateStatus>("updater-status", (e) => setUpdateStatus(e.payload)),
+      listen<FseStatus>("overlay-fse-status", (e) => setFseStatus(e.payload)),
       listen<string>("navigate-tab", (e) => setTab(e.payload as Tab)),
       listen<string>("updater-available-toast", (e) =>
         setToast({
@@ -401,14 +404,17 @@ export default function App() {
         setTab={setTab}
         active={status.visible}
         waiting={overlay.enabled && !status.visible}
-        onForceShow={() => saveSettings({ targetMode: "topmost" })}
+        onForceShow={() => saveSettings({ targetMode: "force_on_screen" })}
         hasUpdate={hasUpdate}
         overlayEnabled={overlay.enabled}
         onToggleOverlay={(enabled) => {
           setOverlay((o) => ({ ...o, enabled }));
-          if (enabled && settings.targetMode === "game" && !status.gameRunning) saveSettings({ targetMode: "topmost" });
+          if (enabled && (settings?.targetMode === "game" || settings?.targetMode === "smart_detect") && !status.gameRunning) {
+            saveSettings({ targetMode: "force_on_screen" });
+          }
         }}
         equippedName={equippedName}
+        activeGame={status.activeGame}
       />
       <main>
         {tab === "vault" && (
@@ -422,6 +428,7 @@ export default function App() {
             vault={vault} setVault={setVault} item={activeItem} overlay={overlay} setOverlay={setOverlay}
             monitors={monitors} status={status} goVault={() => setTab("vault")}
             goLayering={() => setTab("layering")}
+            goSettings={() => setTab("settings")}
             compositeLive={live}
             compositeLayersCount={layers.filter((l) => l.visible).length}
             stopComposite={() => setLive(false)} settings={settings} saveSettings={saveSettings}
@@ -452,6 +459,9 @@ export default function App() {
             monitors={monitors}
             currentMonitor={overlay.monitor}
             onSelectMonitor={(idx) => setOverlay((o) => ({ ...o, monitor: idx }))}
+            fseStatus={fseStatus}
+            onDismissFse={() => setFseStatus({ isFse: false, gameExe: null })}
+            status={status}
           />
         )}
       </main>

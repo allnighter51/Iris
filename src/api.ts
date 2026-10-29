@@ -1,6 +1,7 @@
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import type {
   CompositePreset,
+  FseStatus,
   MonitorInfo,
   OverlayPayload,
   OverlayState,
@@ -41,7 +42,9 @@ export const api = {
   openVaultDir: () => invoke<void>("open_vault_dir"),
   overlayApply: (overlay: OverlayState) => invoke<void>("overlay_apply", { overlay }),
   overlayGet: () => invoke<OverlayPayload>("overlay_get"),
+  overlayGetFseStatus: () => invoke<FseStatus>("overlay_get_fse_status"),
   listMonitors: () => invoke<MonitorInfo[]>("list_monitors"),
+  listRunningProcesses: () => invoke<string[]>("list_running_processes"),
   settingsGet: () => invoke<Settings>("settings_get"),
   settingsSave: (settings: Settings) => invoke<Settings>("settings_save", { settings }),
   updaterCheck: () => invoke<UpdateStatus>("updater_check"),

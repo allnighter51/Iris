@@ -19,6 +19,7 @@ interface Props {
   status: OverlayStatus;
   goVault: () => void;
   goLayering?: () => void;
+  goSettings?: () => void;
   compositeLive: boolean;
   compositeLayersCount?: number;
   stopComposite: () => void;
@@ -38,7 +39,7 @@ const HUE_SWATCHES = [
 
 export function Display({
   vault, setVault, item, overlay, setOverlay, monitors, status,
-  goVault, goLayering, compositeLive, compositeLayersCount,
+  goVault, goLayering, goSettings, compositeLive, compositeLayersCount,
   stopComposite, settings, saveSettings, onLoadItem,
 }: Props) {
   const [adjusting, setAdjusting] = useState(false);
@@ -551,7 +552,15 @@ export function Display({
               <div>
                 <div className="master-title">Enable Overlay on Screen</div>
                 <div className={`mono small ${status.visible ? "ok" : "muted"}`}>
-                  {status.visible ? "● PROJECTING" : overlay.enabled ? "○ WAITING FOR GAME" : "○ OFF"}
+                  {status.visible
+                    ? status.activeGame
+                      ? `● PROJECTING (${status.activeGame.toUpperCase()})`
+                      : "● PROJECTING"
+                    : overlay.enabled
+                    ? status.activeGame
+                      ? `○ WAITING (${status.activeGame.toUpperCase()})`
+                      : "○ WAITING FOR GAME"
+                    : "○ OFF"}
                 </div>
               </div>
               <Toggle
@@ -559,7 +568,9 @@ export function Display({
                 checked={overlay.enabled}
                 onChange={(v) => {
                   setOverlay((o) => ({ ...o, enabled: v }));
-                  if (v && settings?.targetMode === "game" && !status.gameRunning) saveSettings?.({ targetMode: "topmost" });
+                  if (v && (settings?.targetMode === "game" || settings?.targetMode === "smart_detect") && !status.gameRunning) {
+                    saveSettings?.({ targetMode: "force_on_screen" });
+                  }
                 }}
               />
             </div>
@@ -567,24 +578,44 @@ export function Display({
             <div className="display-mode-card" style={{ marginTop: 8, padding: 10, background: "#0c0d18", border: "1px solid var(--border)", borderRadius: 6 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                 <span className="mono bold small" style={{ color: "var(--cyan)" }}>Display Target Mode</span>
-                <span className={`tag mono ${settings?.targetMode !== "game" ? "ok" : ""}`} style={{ fontSize: 10 }}>
-                  {settings?.targetMode !== "game" ? "ALWAYS VISIBLE" : "GAME ONLY"}
+                <span className={`tag mono ${settings?.targetMode !== "game" && settings?.targetMode !== "smart_detect" ? "ok" : ""}`} style={{ fontSize: 10 }}>
+                  {settings?.targetMode !== "game" && settings?.targetMode !== "smart_detect" ? "ALWAYS VISIBLE" : "AUTO-DETECT"}
                 </span>
               </div>
               <div className="seg full" style={{ display: "flex", width: "100%" }}>
-                <button type="button" className={settings?.targetMode !== "game" ? "active" : ""} onClick={() => saveSettings?.({ targetMode: "topmost" })} title="Force overlay visible always over any game or desktop">
-                  Force on Screen (Any Game / Desktop)
+                <button
+                  type="button"
+                  className={settings?.targetMode !== "game" && settings?.targetMode !== "smart_detect" ? "active" : ""}
+                  onClick={() => saveSettings?.({ targetMode: "force_on_screen" })}
+                  title="Keep overlay projected at all times over desktop and any game"
+                >
+                  Force on Screen
                 </button>
-                <button type="button" className={settings?.targetMode === "game" ? "active" : ""} onClick={() => saveSettings?.({ targetMode: "game" })} title="Overlay only appears when the assigned game process is running">
-                  Auto-Attach ({settings?.targetExe || "Game"} Only)
+                <button
+                  type="button"
+                  className={settings?.targetMode === "game" || settings?.targetMode === "smart_detect" ? "active" : ""}
+                  onClick={() => saveSettings?.({ targetMode: "smart_detect" })}
+                  title="Automatically show overlay when a detected or enabled game is running"
+                >
+                  Smart Game Detect
                 </button>
               </div>
-              {settings?.targetMode === "game" && !status.visible && overlay.enabled && (
+              {(settings?.targetMode === "game" || settings?.targetMode === "smart_detect") && (
                 <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                  <span className="mono mini warn" style={{ color: "var(--gold)" }}>Waiting for {settings?.targetExe || "game"}...</span>
-                  <button type="button" className="btn primary small" style={{ padding: "3px 10px", fontSize: 11 }} onClick={() => saveSettings?.({ targetMode: "topmost" })}>
-                    Force Show Now
-                  </button>
+                  {status.activeGame ? (
+                    <span className="mono mini ok" style={{ color: "var(--cyan)" }}>● Active: {status.activeGame}</span>
+                  ) : (
+                    <span className="mono mini warn" style={{ color: "var(--gold)" }}>○ Waiting for game...</span>
+                  )}
+                  {goSettings ? (
+                    <button type="button" className="btn outline small" style={{ padding: "3px 10px", fontSize: 11 }} onClick={goSettings}>
+                      Target Games ({settings?.smartDetectAll !== false ? "124 Games" : `${settings?.enabledGameIds?.length ?? 0} Selected`})
+                    </button>
+                  ) : (
+                    <button type="button" className="btn primary small" style={{ padding: "3px 10px", fontSize: 11 }} onClick={() => saveSettings?.({ targetMode: "force_on_screen" })}>
+                      Force Show Now
+                    </button>
+                  )}
                 </div>
               )}
             </div>

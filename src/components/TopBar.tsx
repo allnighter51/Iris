@@ -12,6 +12,7 @@ interface TopBarProps {
   overlayEnabled?: boolean;
   onToggleOverlay?: (enabled: boolean) => void;
   equippedName?: string | null;
+  activeGame?: string | null;
 }
 
 const TABS: { id: Tab; label: string; desc: string; icon: ReactNode }[] = [
@@ -74,6 +75,7 @@ export function TopBar({
   overlayEnabled = false,
   onToggleOverlay,
   equippedName,
+  activeGame,
 }: TopBarProps) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const brandRef = useRef<HTMLDivElement>(null);
@@ -186,7 +188,11 @@ export function TopBar({
         onClick={waiting && onForceShow ? onForceShow : undefined}
         title={waiting && onForceShow ? "Click to force show overlay on screen now" : undefined}
       >
-        {active ? "● OVERLAY ACTIVE" : waiting ? "○ WAITING FOR GAME (CLICK TO FORCE SHOW)" : "○ STANDBY"}
+        {active
+          ? (activeGame ? `● OVERLAY ACTIVE (${activeGame.toUpperCase()})` : "● OVERLAY ACTIVE")
+          : waiting
+          ? "○ WAITING FOR GAME (CLICK TO FORCE SHOW)"
+          : "○ STANDBY"}
       </div>
 
       <nav className="tabs">

@@ -111,7 +111,7 @@ export interface VaultData {
 
 export interface Settings {
   hotkeyToggle: string; hotkeyNext: string; hotkeyPrev: string;
-  hideFromCapture: boolean; targetMode: "topmost" | "game"; targetExe: string;
+  hideFromCapture: boolean; targetMode: "topmost" | "game" | "force_on_screen" | "smart_detect"; targetExe: string;
   autoGameSwitch?: boolean; autoHideUnfocused?: boolean; gameProfiles?: Record<string, string>;
   startWithWindows: boolean; closeToTray: boolean; hardwareAcceleration: boolean;
   lowResource: boolean; layerHotkeys: Record<string, string>; checkUpdatesOnStartup?: boolean;
@@ -120,6 +120,8 @@ export interface Settings {
   aspectScalingMode?: "contain-16-9" | "fill-screen" | "native-1-1";
   watcherPollMs?: number;
   customTargetExes?: string[];
+  smartDetectAll?: boolean;
+  enabledGameIds?: string[];
 }
 
 export type UpdateStatus =
@@ -148,7 +150,14 @@ export interface OverlayPayload {
   lowRes: boolean;
   aspectScalingMode?: "contain-16-9" | "fill-screen" | "native-1-1";
 }
-export interface OverlayStatus { enabled: boolean; visible: boolean; gameRunning: boolean; }
+export interface OverlayStatus {
+  enabled: boolean;
+  visible: boolean;
+  gameRunning: boolean;
+  activeGame?: string | null;
+  activeExe?: string | null;
+}
+export interface FseStatus { isFse: boolean; gameExe: string | null; }
 export interface MonitorInfo { index: number; name: string; width: number; height: number; x: number; y: number; scale: number; refreshHz: number; }
 export interface KnownGame { name: string; label: string; exes: string[]; color: string; }
 

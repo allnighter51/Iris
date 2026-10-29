@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { api, assetUrl } from "../api";
-import { ELEMENT_TAGS, GAME_EXES, KNOWN_GAMES, ROLES, type CompositePreset, type MonitorInfo, type Settings, type UpdateStatus, type VaultData, type VaultItem } from "../types";
+import { ELEMENT_TAGS, KNOWN_GAMES, ROLES, type CompositePreset, type FseStatus, type MonitorInfo, type OverlayStatus, type Settings, type UpdateStatus, type VaultData, type VaultItem } from "../types";
 import { computeFavoriteOverlay, formatDuration, type UsageStats } from "../usage";
 import { gameClass } from "../util";
 import { StackThumb } from "./SceneView";
 import { Toggle } from "./ui";
+import { GAMES_DATABASE, GAME_GENRES, type GameGenre } from "../games";
 
 export type SettingsTab = "display" | "profiles" | "keybinds" | "telemetry" | "system";
 
@@ -90,9 +91,9 @@ function HotkeyInput({ value, onChange }: { value: string; onChange: (v: string)
   );
 }
 
-function SettingsRow({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
+function SettingsRow({ title, desc, children, stacked }: { title: string; desc?: string; children: ReactNode; stacked?: boolean }) {
   return (
-    <div className="settings-row">
+    <div className={`settings-row ${stacked ? "stacked" : ""}`}>
       <div className="settings-row-info">
         <div className="settings-row-title">{title}</div>
         {desc && <div className="settings-row-desc">{desc}</div>}
@@ -122,16 +123,18 @@ interface SettingsProps {
   monitors?: MonitorInfo[];
   currentMonitor?: number;
   onSelectMonitor?: (idx: number) => void;
+  fseStatus?: FseStatus;
+  onDismissFse?: () => void;
+  status?: OverlayStatus;
 }
 
 export function SettingsView({
   settings: s, save, currentForegroundExe, vault, usageStats, activeOverlayItemId,
   isTelemetryPaused, onToggleTelemetry, onResetTelemetry, onEquipItem, onEquipPreset,
   updateStatus = { status: "idle" }, appVersion, onCheckUpdate, onDownloadUpdate, onRestartUpdate,
-  monitors = [], currentMonitor = 0, onSelectMonitor,
+  monitors = [], currentMonitor = 0, onSelectMonitor, fseStatus, onDismissFse, status,
 }: SettingsProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("display");
-  const [exe, setExe] = useState(s.targetExe);
   const [needsRestart, setNeedsRestart] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [lastExternalExe, setLastExternalExe] = useState<string | null>(() => {
@@ -142,6 +145,28 @@ export function SettingsView({
     }
   });
   const [customExeInput, setCustomExeInput] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedGenre, setSelectedGenre] = useState<GameGenre>("All");
+  const [runningProcesses, setRunningProcesses] = useState<string[]>([]);
+  const [isScanningProcesses, setIsScanningProcesses] = useState(false);
+
+  const refreshRunningProcesses = useCallback(async () => {
+    setIsScanningProcesses(true);
+    try {
+      const list = await api.listRunningProcesses();
+      setRunningProcesses(list);
+    } catch (err) {
+      console.error("Failed to list running processes:", err);
+    } finally {
+      setIsScanningProcesses(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "display") {
+      refreshRunningProcesses();
+    }
+  }, [activeTab, refreshRunningProcesses]);
 
   useEffect(() => {
     if (currentForegroundExe) {
@@ -171,6 +196,68 @@ export function SettingsView({
     save({ customTargetExes: customTargets.filter((t) => t.toLowerCase() !== name.toLowerCase()) });
   };
 
+  const isSmartDetect = s.targetMode === "smart_detect" || s.targetMode === "game";
+  const smartDetectAll = s.smartDetectAll ?? true;
+  const enabledGameIds = useMemo(() => new Set(s.enabledGameIds ?? []), [s.enabledGameIds]);
+
+  const isGameEnabled = (gameId: string) => smartDetectAll || enabledGameIds.has(gameId);
+
+  const toggleGame = (gameId: string) => {
+    if (smartDetectAll) {
+      const next = GAMES_DATABASE.map((g) => g.id).filter((id) => id !== gameId);
+      save({ smartDetectAll: false, enabledGameIds: next });
+    } else {
+      const next = new Set(enabledGameIds);
+      if (next.has(gameId)) {
+        next.delete(gameId);
+      } else {
+        next.add(gameId);
+      }
+      const nextArr = Array.from(next);
+      if (nextArr.length === GAMES_DATABASE.length) {
+        save({ smartDetectAll: true, enabledGameIds: [] });
+      } else {
+        save({ smartDetectAll: false, enabledGameIds: nextArr });
+      }
+    }
+  };
+
+  const filteredGames = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return GAMES_DATABASE.filter((g) => {
+      const matchesGenre = selectedGenre === "All" || g.genre === selectedGenre;
+      if (!matchesGenre) return false;
+      if (!q) return true;
+      return (
+        g.name.toLowerCase().includes(q) ||
+        g.exes.some((e) => e.toLowerCase().includes(q)) ||
+        g.genre.toLowerCase().includes(q)
+      );
+    });
+  }, [searchQuery, selectedGenre]);
+
+  const enabledCount = smartDetectAll ? GAMES_DATABASE.length : (s.enabledGameIds?.length ?? 0);
+
+  const availableRunningProcs = useMemo(() => {
+    const catalogExes = new Set(GAMES_DATABASE.flatMap((g) => g.exes.map((e) => e.toLowerCase())));
+    const customSet = new Set(customTargets.map((c) => c.toLowerCase()));
+    const ignoreSet = new Set([
+      "iris.exe", "iris", "explorer.exe", "taskhostw.exe", "svchost.exe",
+      "searchapp.exe", "startmenuexperiencehost.exe", "textinputhost.exe",
+      "shellexperiencehost.exe", "applicationframehost.exe", "systemsettings.exe",
+      "lockapp.exe", "ctfmon.exe", "dwm.exe", "runtimebroker.exe", "conhost.exe",
+      "cmd.exe", "powershell.exe", "pwsh.exe", "openconsole.exe",
+    ]);
+
+    return runningProcesses.filter((proc) => {
+      const lower = proc.toLowerCase().trim();
+      if (!lower || ignoreSet.has(lower)) return false;
+      if (catalogExes.has(lower)) return false;
+      if (customSet.has(lower)) return false;
+      return true;
+    });
+  }, [runningProcesses, customTargets]);
+
   useEffect(() => {
     if (activeTab === "system" && updateStatus.status === "idle" && onCheckUpdate) {
       onCheckUpdate();
@@ -185,7 +272,7 @@ export function SettingsView({
       : "")
     || "";
 
-  const isBuiltinGame = !!currentForegroundExe && KNOWN_GAMES.some((g) => g.exes.some((e) => e.toLowerCase() === currentForegroundExe.toLowerCase()));
+  const isBuiltinGame = !!currentForegroundExe && GAMES_DATABASE.some((g) => g.exes.some((e) => e.toLowerCase() === currentForegroundExe.toLowerCase()));
   const isCustomGame = !!currentForegroundExe && customTargets.some((e) => e.toLowerCase() === currentForegroundExe.toLowerCase());
   const isGameActive = isBuiltinGame || isCustomGame;
   const favOverlay = computeFavoriteOverlay(vault, usageStats, activeOverlayItemId);
@@ -256,6 +343,9 @@ export function SettingsView({
                 </svg>
               </span>
               <span className="settings-nav-label">{item.label}</span>
+              {item.id === "display" && fseStatus?.isFse && (
+                <span className="settings-nav-badge-warn" title="Fullscreen Exclusive active">!</span>
+              )}
             </button>
           ))}
 
@@ -286,39 +376,300 @@ export function SettingsView({
         <main className="settings-content">
           {activeTab === "display" && (
             <div className="settings-panel">
+              {fseStatus?.isFse && (
+                <div className="fse-warning-banner">
+                  <div className="fse-banner-icon">⚠️</div>
+                  <div className="fse-banner-body">
+                    <div className="fse-banner-header">
+                      <div className="fse-banner-title">
+                        Exclusive Fullscreen Detected — Desktop Overlay Blocked
+                      </div>
+                      {onDismissFse && (
+                        <button type="button" className="fse-banner-close" onClick={onDismissFse} title="Dismiss notification">
+                          ✕
+                        </button>
+                      )}
+                    </div>
+                    <div className="fse-banner-desc">
+                      <strong>{fseStatus.gameExe || "Your game"}</strong> is currently running in <em>Hardware Fullscreen Exclusive (FSE)</em> mode with Windows Fullscreen Optimizations disabled. In this mode, DirectX claims exclusive control of the display output and bypasses the Windows Desktop Window Manager (DWM), preventing any external desktop overlay from drawing over the game.
+                    </div>
+                    <div className="fse-banner-steps">
+                      <div className="fse-step-title">How to restore overlay visibility (Choose one):</div>
+                      <div className="fse-step-item">
+                        <span className="fse-step-badge">1 (Recommended)</span>
+                        <span>
+                          Open <strong>{fseStatus.gameExe ? fseStatus.gameExe.replace(/\.exe$/i, "") : "in-game"}</strong> Video Settings and switch <strong>Display Mode</strong> from <em>Fullscreen</em> to <strong>Windowed Fullscreen</strong> (Borderless). On Windows 10/11 with DirectX 11 flip model, this provides identical latency while enabling overlay compositing.
+                        </span>
+                      </div>
+                      <div className="fse-step-item">
+                        <span className="fse-step-badge">2 (Alternative)</span>
+                        <span>
+                          Right-click <code>{fseStatus.gameExe || "VALORANT-Win64-Shipping.exe"}</code> &gt; <strong>Properties</strong> &gt; <strong>Compatibility</strong> &gt; uncheck <strong>"Disable fullscreen optimizations"</strong>, then apply and restart the game.
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="settings-panel-head">
                 <h3 className="settings-panel-title">Overlay Display &amp; Game Targeting</h3>
                 <p className="settings-panel-desc">Configure whether the overlay stays always-on-top or automatically attaches to running game processes.</p>
               </div>
 
-              <SettingsRow title="Target Mode" desc="Always-on-top desktop overlay, or auto-attach (show overlay only while target game is focused).">
-                <div className="seg">
-                  <button className={s.targetMode === "topmost" ? "active" : ""} onClick={() => save({ targetMode: "topmost" })}>Always on Top</button>
-                  <button className={s.targetMode === "game" ? "active" : ""} onClick={() => save({ targetMode: "game" })}>Auto-Attach to Game</button>
+              <SettingsRow
+                stacked
+                title="Display Target Mode"
+                desc="Choose whether Iris stays permanently projected over all games and desktop, or dynamically detects running games."
+              >
+                <div className="target-mode-buttons">
+                  <button
+                    type="button"
+                    className={`target-mode-btn ${!isSmartDetect ? "active" : ""}`}
+                    onClick={() => save({ targetMode: "force_on_screen" })}
+                  >
+                    <div className="tmb-title">Force on Screen</div>
+                    <div className="tmb-desc">Overlay always stays visible over desktop and any game</div>
+                    <span className={`tmb-badge ${!isSmartDetect ? "active" : ""}`}>ALWAYS VISIBLE</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`target-mode-btn ${isSmartDetect ? "active" : ""}`}
+                    onClick={() => save({ targetMode: "smart_detect" })}
+                  >
+                    <div className="tmb-title">Smart Game Detect</div>
+                    <div className="tmb-desc">Auto-shows when games are active; auto-hides when closed</div>
+                    <span className={`tmb-badge ${isSmartDetect ? "active" : ""}`}>AUTO-DETECT</span>
+                  </button>
                 </div>
               </SettingsRow>
 
-              {s.targetMode === "game" && (
-                <SettingsRow title="Game Executable" desc="Overlay appears only while this process is running.">
-                  <div className="exe">
-                    <select
-                      className="input"
-                      value={GAME_EXES.some((g) => g.exe === s.targetExe) ? s.targetExe : ""}
-                      onChange={(e) => { if (e.target.value) { setExe(e.target.value); save({ targetExe: e.target.value }); } }}
-                    >
-                      <option value="">Custom...</option>
-                      {GAME_EXES.map((g) => <option key={g.exe} value={g.exe}>{g.label}</option>)}
-                    </select>
-                    <input
-                      className="input mono"
-                      value={exe}
-                      onChange={(e) => setExe(e.target.value)}
-                      onBlur={() => exe.trim() && exe !== s.targetExe && save({ targetExe: exe.trim() })}
-                      placeholder="Game.exe"
-                    />
+              <div className="target-games-dropdown">
+                {!isSmartDetect && (
+                  <div className="target-mode-banner mono small">
+                    <span style={{ color: "var(--cyan)" }}>ℹ Mode Notice:</span> <strong>Force on Screen</strong> is currently active (always visible). Game selection below will govern visibility when <strong>Smart Game Detect</strong> is enabled.
                   </div>
-                </SettingsRow>
-              )}
+                )}
+
+                <div className="tgd-header">
+                  <div className="tgd-header-left">
+                    <div className="tgd-title">
+                      <span>🎮 Target Games Catalog</span>
+                      <span className="tgd-count-badge mono">{enabledCount} / {GAMES_DATABASE.length} Active</span>
+                    </div>
+                    <div className="tgd-status-pill">
+                      {status?.activeGame ? (
+                        <span className="mono mini ok">● OVERLAY ACTIVE ({status.activeGame.toUpperCase()})</span>
+                      ) : status?.gameRunning ? (
+                        <span className="mono mini ok">● GAME DETECTED ({status.activeExe || "RUNNING"})</span>
+                      ) : (
+                        <span className="mono mini muted">○ WAITING FOR GAME...</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="tgd-header-right">
+                    <div className="tgd-master-toggle">
+                      <span className="mono mini muted">All Supported (124)</span>
+                      <Toggle
+                        checked={smartDetectAll}
+                        onChange={(v) => {
+                          if (v) {
+                            save({ smartDetectAll: true, enabledGameIds: [] });
+                          } else {
+                            save({ smartDetectAll: false, enabledGameIds: GAMES_DATABASE.map((g) => g.id) });
+                          }
+                        }}
+                      />
+                    </div>
+                    <div className="tgd-action-btns">
+                      <button
+                        type="button"
+                        className="btn outline small mini-btn"
+                        onClick={() => save({ smartDetectAll: true, enabledGameIds: [] })}
+                        title="Enable all 124 popular gaming titles"
+                      >
+                        Select All
+                      </button>
+                      <button
+                        type="button"
+                        className="btn outline small mini-btn"
+                        onClick={() => save({ smartDetectAll: false, enabledGameIds: [] })}
+                        title="Deselect all games (only custom exes will be tracked)"
+                      >
+                        Deselect All
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="tgd-toolbar">
+                  <div className="tgd-search-box">
+                    <span className="tgd-search-icon">🔍</span>
+                    <input
+                      type="text"
+                      className="input mono small tgd-search-input"
+                      placeholder="Search title or .exe (e.g. Valorant, cs2.exe)..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                    />
+                    {searchQuery && (
+                      <button type="button" className="tgd-search-clear" onClick={() => setSearchQuery("")}>
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                  <div className="tgd-genre-chips">
+                    {GAME_GENRES.map((g) => (
+                      <button
+                        key={g}
+                        type="button"
+                        className={`tgd-genre-chip ${selectedGenre === g ? "active" : ""}`}
+                        onClick={() => setSelectedGenre(g)}
+                      >
+                        {g}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="tgd-games-list">
+                  {filteredGames.length === 0 ? (
+                    <div className="tgd-empty mono small muted">
+                      No games match "{searchQuery}" in {selectedGenre}. You can add it below as a custom executable!
+                    </div>
+                  ) : (
+                    filteredGames.map((game) => {
+                      const enabled = isGameEnabled(game.id);
+                      const isRunning =
+                        (status?.activeExe && game.exes.some((e) => e.toLowerCase() === status.activeExe?.toLowerCase())) ||
+                        (currentForegroundExe && game.exes.some((e) => e.toLowerCase() === currentForegroundExe.toLowerCase())) ||
+                        runningProcesses.some((p) => game.exes.some((e) => e.toLowerCase() === p.toLowerCase()));
+
+                      return (
+                        <div
+                          key={game.id}
+                          className={`tgd-game-item ${enabled ? "enabled" : "disabled"} ${isRunning ? "running" : ""}`}
+                          onClick={() => toggleGame(game.id)}
+                        >
+                          <div className="tgd-game-left">
+                            <div onClick={(e) => e.stopPropagation()}>
+                              <Toggle
+                                checked={enabled}
+                                onChange={() => toggleGame(game.id)}
+                              />
+                            </div>
+                            <span className="tgd-game-dot" style={{ backgroundColor: game.color }} />
+                            <div className="tgd-game-meta">
+                              <div className="tgd-game-name-row">
+                                <span className="tgd-game-name">{game.name}</span>
+                                {isRunning && (
+                                  <span className="tgd-running-badge mono">● RUNNING NOW</span>
+                                )}
+                              </div>
+                              <div className="tgd-game-sub mono">
+                                <span className="tgd-genre-tag">{game.genre}</span>
+                                <span className="tgd-exe-tag">{game.exes[0]}</span>
+                                {game.exes.length > 1 && (
+                                  <span className="tgd-exe-extra">+{game.exes.length - 1} more</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="tgd-game-right">
+                            <span className={`tgd-switch-label mono ${enabled ? "ok" : "muted"}`}>
+                              {enabled ? "ACTIVE" : "OFF"}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                <div className="tgd-custom-section">
+                  <div className="tgd-custom-title-row">
+                    <span className="tgd-custom-title mono bold">Custom Game Executables &amp; Process Quick-Picker</span>
+                    <button
+                      type="button"
+                      className="btn outline small mini-btn"
+                      onClick={refreshRunningProcesses}
+                      disabled={isScanningProcesses}
+                      title="Refresh running Windows processes list"
+                    >
+                      {isScanningProcesses ? "Scanning..." : "🔄 Refresh Processes"}
+                    </button>
+                  </div>
+
+                  <div className="tgd-add-row">
+                    <input
+                      type="text"
+                      className="input mono small"
+                      placeholder="Add custom game executable (e.g. MyGame-Win64-Shipping.exe)..."
+                      value={customExeInput}
+                      onChange={(e) => setCustomExeInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          addCustomTarget(customExeInput);
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn primary small"
+                      disabled={!customExeInput.trim()}
+                      onClick={() => addCustomTarget(customExeInput)}
+                    >
+                      + Add Target
+                    </button>
+                  </div>
+
+                  {availableRunningProcs.length > 0 && (
+                    <div className="tgd-proc-picker">
+                      <span className="mono mini muted">Running on PC (Click to track):</span>
+                      <div className="tgd-proc-chips">
+                        {availableRunningProcs.slice(0, 14).map((proc) => (
+                          <button
+                            key={proc}
+                            type="button"
+                            className="tgd-proc-chip mono"
+                            onClick={() => addCustomTarget(proc)}
+                            title={`Add ${proc} to custom targets`}
+                          >
+                            + {proc}
+                          </button>
+                        ))}
+                        {availableRunningProcs.length > 14 && (
+                          <span className="mono mini muted" style={{ alignSelf: "center" }}>
+                            +{availableRunningProcs.length - 14} more
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {customTargets.length > 0 && (
+                    <div className="tgd-custom-chips">
+                      <span className="mono mini" style={{ color: "var(--cyan)" }}>Tracked Custom Games ({customTargets.length}):</span>
+                      <div className="custom-chips-wrap">
+                        {customTargets.map((target) => (
+                          <span key={target} className="custom-exe-chip mono">
+                            <span className="chip-text">{target}</span>
+                            <button
+                              type="button"
+                              className="chip-del-btn"
+                              title={`Remove ${target}`}
+                              onClick={() => removeCustomTarget(target)}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
 
               <SettingsRow
                 title="Target Display & Monitor Routing"

@@ -185,6 +185,16 @@ pub struct Settings {
     pub watcher_poll_ms: u64,
     #[serde(default)]
     pub custom_target_exes: Vec<String>,
+    #[serde(default = "default_true")]
+    pub smart_detect_all: bool,
+    #[serde(default)]
+    pub enabled_game_ids: Vec<String>,
+}
+
+impl Settings {
+    pub fn is_smart_detect(&self) -> bool {
+        self.target_mode == "game" || self.target_mode == "smart_detect"
+    }
 }
 
 impl Default for Settings {
@@ -210,6 +220,8 @@ impl Default for Settings {
             aspect_scaling_mode: "contain-16-9".into(),
             watcher_poll_ms: 500,
             custom_target_exes: Vec::new(),
+            smart_detect_all: true,
+            enabled_game_ids: Vec::new(),
         }
     }
 }
@@ -233,6 +245,13 @@ impl OverlayState {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FseStatus {
+    pub is_fse: bool,
+    pub game_exe: Option<String>,
+}
+
 pub struct AppState {
     pub root: PathBuf,
     pub manifest: Mutex<Manifest>,
@@ -240,6 +259,9 @@ pub struct AppState {
     pub overlay: Mutex<OverlayState>,
     pub game_running: AtomicBool,
     pub last_rect: Mutex<Option<(i32, i32, i32, i32)>>,
+    pub fse_status: Mutex<FseStatus>,
+    pub active_game_title: Mutex<Option<String>>,
+    pub active_game_exe: Mutex<Option<String>>,
     pub counter: AtomicU64,
 }
 
@@ -255,6 +277,9 @@ impl AppState {
             overlay: Mutex::new(OverlayState::default()),
             game_running: AtomicBool::new(false),
             last_rect: Mutex::new(None),
+            fse_status: Mutex::new(FseStatus::default()),
+            active_game_title: Mutex::new(None),
+            active_game_exe: Mutex::new(None),
             counter: AtomicU64::new(0),
         }
     }
@@ -270,6 +295,19 @@ impl AppState {
     }
     pub fn last_rect(&self) -> MutexGuard<'_, Option<(i32, i32, i32, i32)>> {
         self.last_rect.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    pub fn fse_status(&self) -> MutexGuard<'_, FseStatus> {
+        self.fse_status.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    pub fn active_game(&self) -> (Option<String>, Option<String>) {
+        (
+            self.active_game_title.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            self.active_game_exe.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        )
+    }
+    pub fn set_active_game(&self, title: Option<String>, exe: Option<String>) {
+        *self.active_game_title.lock().unwrap_or_else(|e| e.into_inner()) = title;
+        *self.active_game_exe.lock().unwrap_or_else(|e| e.into_inner()) = exe;
     }
 
     pub fn assets_dir(&self) -> PathBuf { self.root.join("vault_assets") }

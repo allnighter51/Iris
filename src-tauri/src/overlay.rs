@@ -25,6 +25,8 @@ pub struct OverlayStatus {
     pub enabled: bool,
     pub visible: bool,
     pub game_running: bool,
+    pub active_game: Option<String>,
+    pub active_exe: Option<String>,
 }
 
 pub fn create_window(app: &AppHandle) -> tauri::Result<()> {
@@ -65,6 +67,9 @@ pub fn active_monitor_rect(app: &AppHandle, st: &AppState) -> (i32, i32, i32, i3
     };
 
     if monitor_mode == "follow-game" {
+        if let Some(r) = win32::get_foreground_monitor_rect() {
+            return r;
+        }
         if let Some((cx, cy)) = win32::get_foreground_window_center() {
             let mons = app.available_monitors().unwrap_or_default();
             for m in &mons {
@@ -76,6 +81,13 @@ pub fn active_monitor_rect(app: &AppHandle, st: &AppState) -> (i32, i32, i32, i3
                 }
             }
         }
+    } else {
+        let base = monitor_rect(app, manual_idx);
+        if let Some(r) = win32::get_foreground_monitor_rect() {
+            if r.0 == base.0 && r.1 == base.1 {
+                return r;
+            }
+        }
     }
     monitor_rect(app, manual_idx)
 }
@@ -85,7 +97,7 @@ fn build_payload(app: &AppHandle, st: &AppState) -> (OverlayPayload, (i32, i32, 
     let s = st.settings().clone();
     let game = st.game_running.load(Ordering::Relaxed);
     let rect = active_monitor_rect(app, st);
-    let visible = o.enabled && o.has_content() && (s.target_mode != "game" || game);
+    let visible = o.enabled && o.has_content() && (!s.is_smart_detect() || game);
     let payload = OverlayPayload {
         state: o,
         visible,
@@ -104,6 +116,7 @@ pub fn refresh(app: &AppHandle) {
     if let Some(win) = app.get_webview_window(LABEL) {
         place_and_show(&win, &st, rect, payload.visible, hide_from_capture);
     }
+    let (active_game, active_exe) = st.active_game();
     let _ = app.emit_to(
         "main",
         "overlay-status",
@@ -111,6 +124,8 @@ pub fn refresh(app: &AppHandle) {
             enabled: payload.state.enabled,
             visible: payload.visible,
             game_running: game,
+            active_game,
+            active_exe,
         },
     );
     let _ = app.emit_to(LABEL, "overlay-state", payload);
@@ -165,4 +180,9 @@ pub fn overlay_apply(app: AppHandle, state: State<AppState>, mut overlay: Overla
 #[tauri::command]
 pub fn overlay_get(app: AppHandle, state: State<AppState>) -> OverlayPayload {
     build_payload(&app, &state).0
+}
+
+#[tauri::command]
+pub fn overlay_get_fse_status(state: State<AppState>) -> FseStatus {
+    state.fse_status().clone()
 }
