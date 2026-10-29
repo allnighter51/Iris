@@ -28,12 +28,17 @@ export function OverlayLayer({ src, imgW, imgH, t, monitorW, monitorH, k, lowRes
     if (t.brightness !== 100) filters.push(`brightness(${t.brightness}%)`);
     if (t.contrast !== 100) filters.push(`contrast(${t.contrast}%)`);
   }
-  const w = (imgW * t.scale) / 100;
-  const h = (imgH * t.scale) / 100;
+  const safeImgW = Math.max(1, Number.isFinite(imgW) ? imgW : 1);
+  const safeImgH = Math.max(1, Number.isFinite(imgH) ? imgH : 1);
+  const safeScale = Number.isFinite(t.scale) ? Math.max(1, t.scale) : 100;
+  const safeX = Number.isFinite(t.x) ? t.x : 0;
+  const safeY = Number.isFinite(t.y) ? t.y : 0;
+  const w = (safeImgW * safeScale) / 100;
+  const h = (safeImgH * safeScale) / 100;
   const img: CSSProperties = {
     position: "absolute",
-    left: monitorW / 2 + t.x - w / 2,
-    top: monitorH / 2 + t.y - h / 2,
+    left: monitorW / 2 + safeX - w / 2,
+    top: monitorH / 2 + safeY - h / 2,
     width: w,
     height: h,
     opacity: t.opacity / 100,

@@ -107,7 +107,7 @@ export function toScene(layers: Layer[], vault: VaultData, factor = 1): SceneLay
     const it = byId.get(l.vaultItemId);
     if (!it) continue;
     out.push({
-      path: `${vault.assetsDir}\\${it.file}`,
+      path: `${vault.assetsDir.replace(/[\\/]+$/, "")}\\${it.file.replace(/^[\\/]+/, "")}`,
       width: it.width,
       height: it.height,
       transform: {
@@ -134,15 +134,20 @@ export interface Box {
 
 export function layerBox(l: Layer, imgW: number, imgH: number): Box {
   const fx = fxOf(l);
-  const fw = (imgW * l.scale) / 100;
-  const fh = (imgH * l.scale) / 100;
+  const safeImgW = Math.max(1, Number.isFinite(imgW) ? imgW : 1);
+  const safeImgH = Math.max(1, Number.isFinite(imgH) ? imgH : 1);
+  const safeScale = Number.isFinite(l.scale) ? Math.max(1, l.scale) : 100;
+  const safeX = Number.isFinite(l.x) ? l.x : 0;
+  const safeY = Number.isFinite(l.y) ? l.y : 0;
+  const fw = (safeImgW * safeScale) / 100;
+  const fh = (safeImgH * safeScale) / 100;
   const visL = ((fx.flipX ? fx.cropR : fx.cropL) / 100) * fw;
   const visR = ((fx.flipX ? fx.cropL : fx.cropR) / 100) * fw;
   const visT = ((fx.flipY ? fx.cropB : fx.cropT) / 100) * fh;
   const visB = ((fx.flipY ? fx.cropT : fx.cropB) / 100) * fh;
   return {
-    l: l.x - fw / 2 + visL,
-    t: l.y - fh / 2 + visT,
+    l: safeX - fw / 2 + visL,
+    t: safeY - fh / 2 + visT,
     w: Math.max(4, fw - visL - visR),
     h: Math.max(4, fh - visT - visB),
   };

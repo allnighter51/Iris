@@ -54,4 +54,4 @@ export const api = {
   getAppVersion: () => invoke<string>("get_app_version"),
 };
 
-export const assetUrl = (dir: string, file: string) => convertFileSrc(`${dir}\\${file}`);
+export const assetUrl = (dir: string, file: string) => convertFileSrc(`${dir.replace(/[\\/]+$/, "")}\\${file.replace(/^[\\/]+/, "")}`);

@@ -6,16 +6,39 @@ import { api } from "./api";
 import type { OverlayPayload, SceneLayer } from "./types";
 import "./styles.css";
 
+const MAX_UNUSED_CACHE = 12;
 const images = new Map<string, Promise<HTMLImageElement>>();
+const accessOrder: string[] = [];
 
-/** Decode each file once; later redraws reuse the decoded bitmap. */
+/** Evict oldest unused decoded bitmaps to cap VRAM / memory footprint */
+function pruneImageCache(activePaths: Set<string>) {
+  const unused = accessOrder.filter((p) => !activePaths.has(p));
+  while (unused.length > MAX_UNUSED_CACHE) {
+    const oldest = unused.shift();
+    if (oldest) {
+      images.delete(oldest);
+      const idx = accessOrder.indexOf(oldest);
+      if (idx !== -1) accessOrder.splice(idx, 1);
+    }
+  }
+}
+
+/** Decode each file once; later redraws reuse the decoded bitmap with bounded LRU retention. */
 function loadImage(path: string): Promise<HTMLImageElement> {
+  const idx = accessOrder.indexOf(path);
+  if (idx !== -1) accessOrder.splice(idx, 1);
+  accessOrder.push(path);
+
   let p = images.get(path);
   if (!p) {
     const img = new Image();
     img.src = convertFileSrc(path);
     p = img.decode().then(() => img);
-    p.catch(() => images.delete(path));
+    p.catch(() => {
+      images.delete(path);
+      const i = accessOrder.indexOf(path);
+      if (i !== -1) accessOrder.splice(i, 1);
+    });
     images.set(path, p);
   }
   return p;
@@ -28,18 +51,23 @@ function loadImage(path: string): Promise<HTMLImageElement> {
  */
 function Overlay() {
   const [p, setP] = useState<OverlayPayload | null>(null);
-  const [dpr, setDpr] = useState(window.devicePixelRatio || 1);
   const canvas = useRef<HTMLCanvasElement>(null);
   const token = useRef(0);
+  const payloadSeq = useRef(0);
 
   useEffect(() => {
-    api.overlayGet().then(setP);
-    const un = listen<OverlayPayload>("overlay-state", (e) => setP(e.payload));
-    const onResize = () => setDpr(window.devicePixelRatio || 1);
-    window.addEventListener("resize", onResize);
+    const initialSeq = ++payloadSeq.current;
+    api.overlayGet().then((res) => {
+      if (initialSeq === payloadSeq.current) {
+        setP(res);
+      }
+    });
+    const un = listen<OverlayPayload>("overlay-state", (e) => {
+      payloadSeq.current++;
+      setP(e.payload);
+    });
     return () => {
       un.then((f) => f());
-      window.removeEventListener("resize", onResize);
     };
   }, []);
 
@@ -60,6 +88,7 @@ function Overlay() {
       c.height = 1;
       return;
     }
+    pruneImageCache(new Set(layers.map((l) => l.path)));
     Promise.all(layers.map((l) => loadImage(l.path).catch(() => null))).then((imgs) => {
       if (my !== token.current) return; // superseded by a newer state
       c.width = W; // also clears
@@ -122,8 +151,6 @@ function Overlay() {
     });
   }, [p]);
 
-  const W = p?.monitorW ?? 1;
-  const H = p?.monitorH ?? 1;
   const isChroma = Boolean(
     p?.state.transform?.chromaCycle ||
     p?.state.scene?.some((l) => l.transform?.chromaCycle)
@@ -161,8 +188,8 @@ function Overlay() {
         position: "absolute",
         left: 0,
         top: 0,
-        width: W / dpr,
-        height: H / dpr,
+        width: "100%",
+        height: "100%",
         pointerEvents: "none",
       }}
     />

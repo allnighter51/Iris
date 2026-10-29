@@ -124,6 +124,25 @@ export default function App() {
 
   useEffect(() => { if (tab === "settings") setUsageStats({ ...usageStatsRef.current }); }, [tab]);
 
+  // Prune deleted items/presets from usageStats.overlayTime
+  useEffect(() => {
+    if (!vault) return;
+    updateUsage((cur) => {
+      const validItemIds = new Set(vault.items.map((i) => i.id));
+      const validPresetIds = new Set(vault.presets.map((p) => `preset:${p.id}`));
+      let changed = false;
+      const pruned: Record<string, number> = {};
+      for (const [key, val] of Object.entries(cur.overlayTime)) {
+        if (validItemIds.has(key) || validPresetIds.has(key)) {
+          pruned[key] = val;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? { ...cur, overlayTime: pruned } : cur;
+    });
+  }, [vault, updateUsage]);
+
   useEffect(() => {
     Promise.all([api.vaultLoad(), api.settingsGet(), api.listMonitors(), api.updaterGetStatus()])
       .then(([v, s, m, u]) => {
@@ -295,7 +314,7 @@ export default function App() {
       localStorage.setItem("iris_recent_display_ids", JSON.stringify(updated));
     } catch { /* ignore */ }
     setOverlay((o) => ({
-      ...o, enabled: true, itemId: item.id, path: `${vault.assetsDir}\\${item.file}`,
+      ...o, enabled: true, itemId: item.id, path: `${vault.assetsDir.replace(/[\\/]+$/, "")}\\${item.file.replace(/^[\\/]+/, "")}`,
       width: item.width, height: item.height, transform: item.transform ?? DEFAULT_TRANSFORM,
     }));
     if (goToDisplay) setTab("display");
@@ -363,6 +382,10 @@ export default function App() {
     api.updaterRestart();
   }, []);
 
+  const loadPresetRef = useRef(loadPreset); loadPresetRef.current = loadPreset;
+  const loadItemRef = useRef(loadItem); loadItemRef.current = loadItem;
+  const recordUploadRef = useRef(recordUpload); recordUploadRef.current = recordUpload;
+
   useEffect(() => {
     const un = listen<string | null>("foreground-process-changed", (e) => {
       const fg = e.payload;
@@ -377,11 +400,11 @@ export default function App() {
       lastAutoGame.current = matchedGame.name;
 
       const applyPreset = (p: CompositePreset) => {
-        loadPreset(p, true, false);
+        loadPresetRef.current(p, true, false);
         setToast({ title: `● Auto-Switched to ${matchedGame.label}`, sub: `Loaded loadout "${p.name}"` });
       };
       const applyItem = (it: VaultItem) => {
-        loadItem(it, false);
+        loadItemRef.current(it, false);
         setToast({ title: `● Auto-Switched to ${matchedGame.label}`, sub: `Loaded overlay "${it.name}"` });
       };
 
@@ -401,7 +424,7 @@ export default function App() {
       if (matchingItem) applyItem(matchingItem);
     });
     return () => { un.then((f) => f()); };
-  }, [loadPreset, loadItem]);
+  }, []);
 
   useEffect(() => {
     const un = listen<string>("iris-protocol-url", async (e) => {
@@ -416,19 +439,22 @@ export default function App() {
           const game = parsedUrl.searchParams.get("game") || "Other";
           if (!downloadUrl) return;
           setToast({ title: "Downloading Pack from veevisuals.art…", sub: name });
-          const res = await fetch(downloadUrl);
+          const res = await fetch(downloadUrl, { signal: AbortSignal.timeout(15000) });
+          if (!res.ok) {
+            throw new Error(`Server returned HTTP ${res.status}: ${res.statusText}`);
+          }
           const buf = await res.arrayBuffer();
           const bmp = await createImageBitmap(new Blob([buf]));
           const { width, height } = bmp;
           bmp.close();
           const importedItem = await api.importAsset(new Uint8Array(buf), { name, game, folder: "", tag: "", width, height });
-          recordUpload();
+          recordUploadRef.current();
           setVault(await api.vaultLoad());
           setToast({
             title: "✓ Installed from veevisuals.art!",
             sub: `${name} (${game}) is ready in your Vault`,
             actionLabel: "Equip Now",
-            onAction: () => loadItem(importedItem, true),
+            onAction: () => loadItemRef.current(importedItem, true),
           });
         } else if (action === "preset") {
           const parsed = parsePresetPayload(parsedUrl.searchParams.get("data") || "", vaultRef.current?.items || []);
@@ -439,10 +465,16 @@ export default function App() {
             setToast({ title: "✓ Loadout Loaded from veevisuals.art", sub: `${parsed.name} (${parsed.layers.length} layers)` });
           }
         }
-      } catch (err) { console.error("Failed to process iris protocol:", err); }
+      } catch (err) {
+        console.error("Failed to process iris protocol:", err);
+        setToast({
+          title: "Failed to Download Pack",
+          sub: err instanceof Error ? err.message : String(err),
+        });
+      }
     });
     return () => { un.then((f) => f()); };
-  }, [loadItem, recordUpload]);
+  }, []);
 
   useEffect(() => {
     if (!toast || toast.persistent) return;

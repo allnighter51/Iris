@@ -153,6 +153,8 @@ export function Display({
     guideTimer.current = window.setTimeout(() => setAdjusting(false), 1400);
   }, []);
 
+  useEffect(() => () => window.clearTimeout(guideTimer.current), []);
+
   const patch = useCallback((p: Partial<Transform>) => {
     setOverlay((o) => ({ ...o, transform: { ...o.transform, ...p } }));
     setSaved(false);

@@ -514,7 +514,7 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14p
 .guide.h { left: 0; right: 0; height: 1px; }
 .lbox { position: absolute; border: 1px solid var(--cyan); box-shadow: 0 0 10px rgba(6, 182, 212, 0.35); pointer-events: none; z-index: 3; }
 .lbox.locked { border-style: dashed; border-color: var(--tech); box-shadow: none; }
-.lbox-floating-pill { position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); background: rgba(11, 14, 24, 0.94); border: 1px solid rgba(6, 182, 212, 0.45); border-radius: 999px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6), 0 0 14px rgba(6, 182, 212, 0.15); display: flex; align-items: center; gap: 3px; padding: 3px 6px; z-index: 10; pointer-events: auto; white-space: nowrap; user-select: none; }
+.lbox-floating-pill { position: absolute; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); background: rgba(11, 14, 24, 0.94); border: 1px solid rgba(6, 182, 212, 0.45); border-radius: 999px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6), 0 0 14px rgba(6, 182, 212, 0.15); display: flex; align-items: center; gap: 3px; padding: 3px 6px; z-index: 9999; pointer-events: auto; white-space: nowrap; user-select: none; }
 .lbox-floating-pill.below { bottom: auto; top: calc(100% + 8px); }
 .pill-action-btn { background: none; border: 0; color: #94a3b8; width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; cursor: pointer; transition: all 0.12s; padding: 0; }
 .pill-action-btn:hover { color: #f1f5f9; background: rgba(255, 255, 255, 0.08); }

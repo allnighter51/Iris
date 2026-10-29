@@ -59,7 +59,7 @@ fn emit_status(app: &AppHandle, status: UpdateStatus) -> UpdateStatus {
 fn build_updater(
     app: &AppHandle,
 ) -> Result<tauri_plugin_updater::Updater, tauri_plugin_updater::Error> {
-    let mut builder = app.updater_builder();
+    let mut builder = app.updater_builder().timeout(Duration::from_secs(8));
     #[cfg(target_os = "windows")]
     {
         builder = builder.target("windows-x86_64-nsis");

@@ -147,6 +147,27 @@ export function Layering(p: Props) {
   const [isPanning, setIsPanning] = useState(false);
   const [ref, setRef] = useState<RefKey>("grid");
   const [customShot, setCustomShot] = useState<string | null>(() => localStorage.getItem("iris_custom_ref_shot"));
+  const [customShotDims, setCustomShotDims] = useState<{ w: number; h: number } | null>(() => {
+    try {
+      const raw = localStorage.getItem("iris_custom_ref_shot_dims");
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    if (customShot && !customShotDims) {
+      const img = new Image();
+      img.onload = () => {
+        setCustomShotDims({ w: img.naturalWidth, h: img.naturalHeight });
+        try {
+          localStorage.setItem("iris_custom_ref_shot_dims", JSON.stringify({ w: img.naturalWidth, h: img.naturalHeight }));
+        } catch { /* ignore */ }
+      };
+      img.src = customShot;
+    }
+  }, [customShot, customShotDims]);
   const [guides, setGuides] = useState<{ xs: number[]; ys: number[] }>({ xs: [], ys: [] });
   const [saveOpen, setSaveOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -274,15 +295,21 @@ export function Layering(p: Props) {
     };
   }, []);
 
-  // Push completed snapshot to history
+  // Push completed snapshot to history atomically
   const commitHistory = useCallback((nextLayers: Layer[]) => {
     setHistory((h) => {
-      const sliced = h.slice(0, historyIdxRef.current + 1);
+      const currentIdx = historyIdxRef.current;
+      const cur = h[currentIdx];
+      if (cur && JSON.stringify(cur) === JSON.stringify(nextLayers)) {
+        return h;
+      }
+      const sliced = h.slice(0, currentIdx + 1);
       const updated = [...sliced, nextLayers];
       if (updated.length > 50) updated.shift();
+      const nextIdx = updated.length - 1;
+      setHistoryIdx(nextIdx);
       return updated;
     });
-    setHistoryIdx((prev) => Math.min(prev + 1, 49));
   }, []);
 
   // Sync outside/interactive changes with history (avoiding drag frames)
@@ -294,18 +321,8 @@ export function Layering(p: Props) {
     if (isDraggingRef.current) {
       return;
     }
-    setHistory((h) => {
-      const cur = h[historyIdxRef.current];
-      if (cur && JSON.stringify(cur) === JSON.stringify(layers)) {
-        return h;
-      }
-      const sliced = h.slice(0, historyIdxRef.current + 1);
-      const updated = [...sliced, layers];
-      if (updated.length > 50) updated.shift();
-      return updated;
-    });
-    setHistoryIdx((prev) => Math.min(prev + 1, 49));
-  }, [layers]);
+    commitHistory(layers);
+  }, [layers, commitHistory]);
 
   // Clean stale selection ids
   useEffect(() => {
@@ -436,11 +453,12 @@ export function Layering(p: Props) {
 
   // Canva-Style Z-Index manipulation (layers[0] is FRONT/TOP)
   const bringForward = useCallback(() => {
-    if (!selectedIds.length) return;
+    const targets = selectedIds.length ? selectedIds : (selectedId ? [selectedId] : []);
+    if (!targets.length) return;
     setLayers((ls) => {
       const res = [...ls];
       for (let i = 1; i < res.length; i++) {
-        if (selectedIds.includes(res[i].id) && !selectedIds.includes(res[i - 1].id)) {
+        if (targets.includes(res[i].id) && !targets.includes(res[i - 1].id)) {
           const tmp = res[i];
           res[i] = res[i - 1];
           res[i - 1] = tmp;
@@ -448,14 +466,15 @@ export function Layering(p: Props) {
       }
       return res;
     });
-  }, [selectedIds, setLayers]);
+  }, [selectedIds, selectedId, setLayers]);
 
   const sendBackward = useCallback(() => {
-    if (!selectedIds.length) return;
+    const targets = selectedIds.length ? selectedIds : (selectedId ? [selectedId] : []);
+    if (!targets.length) return;
     setLayers((ls) => {
       const res = [...ls];
       for (let i = res.length - 2; i >= 0; i--) {
-        if (selectedIds.includes(res[i].id) && !selectedIds.includes(res[i + 1].id)) {
+        if (targets.includes(res[i].id) && !targets.includes(res[i + 1].id)) {
           const tmp = res[i];
           res[i] = res[i + 1];
           res[i + 1] = tmp;
@@ -463,25 +482,27 @@ export function Layering(p: Props) {
       }
       return res;
     });
-  }, [selectedIds, setLayers]);
+  }, [selectedIds, selectedId, setLayers]);
 
   const bringToFront = useCallback(() => {
-    if (!selectedIds.length) return;
+    const targets = selectedIds.length ? selectedIds : (selectedId ? [selectedId] : []);
+    if (!targets.length) return;
     setLayers((ls) => {
-      const selected = ls.filter((l) => selectedIds.includes(l.id));
-      const rest = ls.filter((l) => !selectedIds.includes(l.id));
+      const selected = ls.filter((l) => targets.includes(l.id));
+      const rest = ls.filter((l) => !targets.includes(l.id));
       return [...selected, ...rest];
     });
-  }, [selectedIds, setLayers]);
+  }, [selectedIds, selectedId, setLayers]);
 
   const sendToBack = useCallback(() => {
-    if (!selectedIds.length) return;
+    const targets = selectedIds.length ? selectedIds : (selectedId ? [selectedId] : []);
+    if (!targets.length) return;
     setLayers((ls) => {
-      const selected = ls.filter((l) => selectedIds.includes(l.id));
-      const rest = ls.filter((l) => !selectedIds.includes(l.id));
+      const selected = ls.filter((l) => targets.includes(l.id));
+      const rest = ls.filter((l) => !targets.includes(l.id));
       return [...rest, ...selected];
     });
-  }, [selectedIds, setLayers]);
+  }, [selectedIds, selectedId, setLayers]);
 
   const cycleSelection = useCallback((backwards = false) => {
     const list = layersRef.current;
@@ -511,10 +532,15 @@ export function Layering(p: Props) {
   const toggleLockSelected = useCallback(() => {
     const targets = selectedIds.length ? selectedIds : (selectedId ? [selectedId] : []);
     if (!targets.length) return;
+    let willLock = false;
     setLayers((ls) => {
       const anyUnlocked = ls.some((l) => targets.includes(l.id) && !l.locked);
+      willLock = anyUnlocked;
       return ls.map((l) => (targets.includes(l.id) ? { ...l, locked: anyUnlocked } : l));
     });
+    if (willLock) {
+      setSelectedIds([]);
+    }
   }, [selectedIds, selectedId, setLayers]);
 
   const toggleVisibilitySelected = useCallback(() => {
@@ -684,6 +710,11 @@ export function Layering(p: Props) {
     }
     if (e.button !== 0) return;
 
+    // Ignore clicks on floating action pill or controls
+    if ((e.target as HTMLElement).closest(".lbox-floating-pill")) {
+      return;
+    }
+
     // Check whether click occurred inside the artboard
     const artboardEl = stage.current;
     const isInsideArtboard = artboardEl && (artboardEl === e.target || artboardEl.contains(e.target as Node));
@@ -705,7 +736,8 @@ export function Layering(p: Props) {
       return;
     }
     if (handle && sel && !sel.locked) {
-      const b = boxOf(sel)!;
+      const b = boxOf(sel);
+      if (!b) return;
       const [hx, hy] = handle.split(",").map(Number);
       viewportRef.current?.setPointerCapture(e.pointerId);
       isDraggingRef.current = true;
@@ -714,9 +746,11 @@ export function Layering(p: Props) {
       return;
     }
 
+    // Skip locked layers completely so clicks pass straight through to unlocked layers underneath
     const hit = layers.find((l) => {
+      if (l.locked || !l.visible) return false;
       const b = boxOf(l);
-      if (!l.visible || !b) return false;
+      if (!b) return false;
       const cx = mx - W / 2, cy = my - H / 2;
       return cx >= b.l && cx <= b.l + b.w && cy >= b.t && cy <= b.t + b.h;
     });
@@ -730,6 +764,8 @@ export function Layering(p: Props) {
     }
 
     if (hit && !hit.locked) {
+      const hitBox = boxOf(hit);
+      if (!hitBox) return;
       isDraggingRef.current = true;
       initialDragLayers.current = layersRef.current;
       const effectiveIds = selectedIds.includes(hit.id) && selectedIds.length > 1 ? selectedIds : [hit.id];
@@ -751,7 +787,7 @@ export function Layering(p: Props) {
         px: mx,
         py: my,
         starts: members.map((m) => ({ id: m.id, x: m.x, y: m.y })),
-        box: boxOf(hit)!,
+        box: hitBox,
         others: layers.filter((l) => l.visible && !movingSet.has(l.id)).map(boxOf).filter((b): b is Box => !!b),
       };
     }
@@ -840,15 +876,16 @@ export function Layering(p: Props) {
   const onDoubleClickStage = (e: React.MouseEvent) => {
     const { mx, my } = toMonitor(e.clientX, e.clientY);
     const hit = layers.find((l) => {
+      if (l.locked || !l.visible) return false;
       const b = boxOf(l);
-      if (!l.visible || !b) return false;
+      if (!b) return false;
       const cx = mx - W / 2, cy = my - H / 2;
       return cx >= b.l && cx <= b.l + b.w && cy >= b.t && cy <= b.t + b.h;
     });
-    if (hit && !hit.locked) {
+    if (hit) {
       setSelectedIds([hit.id]);
       setTool("crop");
-    } else if (!hit) {
+    } else {
       resetZoomFit();
     }
   };
@@ -1057,6 +1094,13 @@ export function Layering(p: Props) {
       if (res) {
         setCustomShot(res);
         try { localStorage.setItem("iris_custom_ref_shot", res); } catch { /* ignore */ }
+        const img = new Image();
+        img.onload = () => {
+          const dims = { w: img.naturalWidth, h: img.naturalHeight };
+          setCustomShotDims(dims);
+          try { localStorage.setItem("iris_custom_ref_shot_dims", JSON.stringify(dims)); } catch { /* ignore */ }
+        };
+        img.src = res;
         setRef("custom");
       }
     };
@@ -1069,7 +1113,6 @@ export function Layering(p: Props) {
     p.setCanvasRes(list[(((cur < 0 ? 0 : cur) + dir) % list.length + list.length) % list.length]);
   };
 
-  const bgImage = ref === "custom" && customShot ? `url(${customShot})` : undefined;
   const previewLayers = soloId ? layers.map((l) => ({ ...l, visible: l.id === soloId })) : layers;
   const selBox = sel && sel.visible ? boxOf(sel) : null;
   const selFx = sel ? fxOf(sel) : null;
@@ -1119,8 +1162,6 @@ export function Layering(p: Props) {
               width: `${baseW}px`,
               height: `${baseH}px`,
               aspectRatio: `${W} / ${H}`,
-              backgroundImage: bgImage,
-              backgroundSize: "100% 100%",
               transformOrigin: "0 0",
               transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
             }}
@@ -1132,6 +1173,45 @@ export function Layering(p: Props) {
                 <div className="prompt-title">No in-game screenshot uploaded</div>
                 <div className="muted small">Click to upload a full-screen screenshot (1080p, 1440p, 4K) from Overwatch 2, Valorant, Marvel Rivals, etc.</div>
                 <button type="button" className="btn small primary prompt-btn">Upload Screenshot</button>
+              </div>
+            )}
+            {ref === "custom" && customShot && (
+              <div
+                className="custom-ref-layer"
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  overflow: "hidden",
+                  pointerEvents: "none",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  zIndex: 0,
+                }}
+              >
+                <img
+                  src={customShot}
+                  alt="Reference Screenshot"
+                  style={
+                    customShotDims && customShotDims.w > 0 && customShotDims.h > 0
+                      ? {
+                          width: `${(customShotDims.w / W) * 100}%`,
+                          height: `${(customShotDims.h / H) * 100}%`,
+                          maxWidth: "none",
+                          maxHeight: "none",
+                          objectFit: "fill",
+                          pointerEvents: "none",
+                          userSelect: "none",
+                        }
+                      : {
+                          maxWidth: "100%",
+                          maxHeight: "100%",
+                          objectFit: "contain",
+                          pointerEvents: "none",
+                          userSelect: "none",
+                        }
+                  }
+                />
               </div>
             )}
             <SceneImages layers={previewLayers} vault={vault} refW={W} refH={H} />
@@ -1166,14 +1246,31 @@ export function Layering(p: Props) {
             {sel && selBox && (
               <div
                 className={`lbox${sel.locked ? " locked" : ""}${tool === "crop" ? " cropping" : ""}`}
-                style={{ left: pct(W / 2 + selBox.l, W), top: pct(H / 2 + selBox.t, H), width: pct(selBox.w, W), height: pct(selBox.h, H) }}
+                style={{
+                  left: pct(W / 2 + selBox.l, W),
+                  top: pct(H / 2 + selBox.t, H),
+                  width: pct(selBox.w, W),
+                  height: pct(selBox.h, H),
+                  pointerEvents: "none",
+                }}
               >
                 {tool === "move" && (
-                  <div className={`lbox-floating-pill${H / 2 + selBox.t < 38 ? " below" : ""}`}>
+                  <div
+                    className={`lbox-floating-pill${H / 2 + selBox.t < 38 ? " below" : ""}`}
+                    style={{
+                      transform: `translateX(-50%) scale(${1 / Math.max(0.25, zoom)})`,
+                      transformOrigin: H / 2 + selBox.t < 38 ? "center top" : "center bottom",
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     <button
                       type="button"
                       className="pill-action-btn"
                       title="Bring Forward (Ctrl + ])"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
                       onClick={(e) => { e.stopPropagation(); bringForward(); }}
                     >
                       ▲
@@ -1182,6 +1279,8 @@ export function Layering(p: Props) {
                       type="button"
                       className="pill-action-btn"
                       title="Send Backward (Ctrl + [)"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
                       onClick={(e) => { e.stopPropagation(); sendBackward(); }}
                     >
                       ▼
@@ -1191,6 +1290,8 @@ export function Layering(p: Props) {
                       type="button"
                       className="pill-action-btn"
                       title="Duplicate (Ctrl + D)"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
                       onClick={(e) => { e.stopPropagation(); duplicateSelected(); }}
                     >
                       <CopyIcon />
@@ -1199,6 +1300,8 @@ export function Layering(p: Props) {
                       type="button"
                       className={`pill-action-btn${sel.locked ? " active-lock" : ""}`}
                       title="Toggle Lock (Alt + Shift + L)"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
                       onClick={(e) => { e.stopPropagation(); toggleLockSelected(); }}
                     >
                       <LockIcon open={!sel.locked} />
@@ -1208,6 +1311,8 @@ export function Layering(p: Props) {
                       className="pill-action-btn"
                       title="Crop Mode (C or Double-Click)"
                       disabled={sel.locked}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
                       onClick={(e) => { e.stopPropagation(); setTool("crop"); }}
                     >
                       ✂
@@ -1218,6 +1323,8 @@ export function Layering(p: Props) {
                       className="pill-action-btn pill-danger"
                       title="Delete (Del)"
                       disabled={sel.locked}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onMouseDown={(e) => e.stopPropagation()}
                       onClick={(e) => { e.stopPropagation(); deleteSelected(); }}
                     >
                       <TrashIcon />

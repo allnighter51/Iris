@@ -146,10 +146,19 @@ pub fn save_thumbnail(state: State<AppState>, request: Request<'_>) -> Result<Va
         return Err("Invalid item id".into());
     }
     let thumb = format!("{id}.png");
+    // Verify item exists prior to disk write
+    {
+        let m = state.manifest();
+        if !m.items.iter().any(|i| i.id == id) {
+            return Err("unknown item".into());
+        }
+    }
+    // Perform disk I/O without holding the manifest lock
+    let thumb_path = state.thumbs_dir().join(&thumb);
+    fs::write(&thumb_path, bytes).map_err(|e| e.to_string())?;
     {
         let mut m = state.manifest();
         let item = m.items.iter_mut().find(|i| i.id == id).ok_or("unknown item")?;
-        fs::write(state.thumbs_dir().join(&thumb), bytes).map_err(|e| e.to_string())?;
         item.thumb = Some(thumb);
     }
     persist(&state)?;
@@ -217,6 +226,10 @@ pub fn vault_delete_item(state: State<AppState>, id: String) -> Result<VaultPayl
                     let _ = fs::remove_file(state.thumbs_dir().join(t));
                 }
             }
+        }
+        // Prune any layers referencing this deleted asset from saved presets
+        for preset in &mut m.presets {
+            preset.layers.retain(|l| l.vault_item_id != id);
         }
     }
     persist(&state)?;

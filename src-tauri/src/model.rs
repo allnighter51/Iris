@@ -316,10 +316,19 @@ impl AppState {
     pub fn settings_path(&self) -> PathBuf { self.root.join("settings.json") }
 
     pub fn is_valid_asset_path(&self, path_str: &str) -> bool {
-        !path_str.is_empty()
-            && !path_str.contains("..")
-            && !path_str.contains('\0')
-            && Path::new(path_str).starts_with(self.assets_dir())
+        if path_str.is_empty() || path_str.contains("..") || path_str.contains('\0') {
+            return false;
+        }
+        let norm_input = path_str.replace('/', "\\");
+        let norm_assets = self.assets_dir().to_string_lossy().replace('/', "\\");
+        #[cfg(target_os = "windows")]
+        {
+            norm_input.to_ascii_lowercase().starts_with(&norm_assets.to_ascii_lowercase())
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            std::path::Path::new(&norm_input).starts_with(std::path::Path::new(&norm_assets))
+        }
     }
 }
 

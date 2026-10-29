@@ -14,9 +14,20 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 pub fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
         let _ = w.unminimize();
+        let _ = w.show();
         let _ = w.set_focus();
+        if let Ok(h) = w.hwnd() {
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::ShowWindow(
+                    windows::Win32::Foundation::HWND(h.0 as *mut std::ffi::c_void),
+                    windows::Win32::UI::WindowsAndMessaging::SW_RESTORE,
+                );
+                let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(
+                    windows::Win32::Foundation::HWND(h.0 as *mut std::ffi::c_void),
+                );
+            }
+        }
     }
 }
 
@@ -68,25 +79,34 @@ pub fn register_hotkeys(app: &AppHandle) {
     let gs = app.global_shortcut();
     let _ = gs.unregister_all();
 
-    let bind = |key: &str, f: Box<dyn Fn(&AppHandle) + Send + Sync>| {
+    let bind = |key: &str, role_desc: &str, f: Box<dyn Fn(&AppHandle) + Send + Sync>| {
         let k = key.trim();
         if k.is_empty() {
             return;
         }
-        if let Ok(sc) = k.parse::<Shortcut>() {
-            let _ = gs.on_shortcut(sc, move |app, _, ev| {
-                if ev.state == ShortcutState::Pressed {
-                    f(app);
+        match k.parse::<Shortcut>() {
+            Ok(sc) => {
+                if let Err(e) = gs.on_shortcut(sc, move |app, _, ev| {
+                    if ev.state == ShortcutState::Pressed {
+                        f(app);
+                    }
+                }) {
+                    eprintln!("[Iris] Hotkey collision for '{}' ({}): {}", k, role_desc, e);
+                    let _ = app.emit_to("main", "overlay-hotkey-conflict", format!("{}: {}", role_desc, k));
                 }
-            });
+            }
+            Err(e) => {
+                eprintln!("[Iris] Invalid shortcut '{}': {}", k, e);
+            }
         }
     };
 
-    bind(&s.hotkey_toggle, Box::new(|a| overlay::toggle(a)));
-    bind(&s.hotkey_next, Box::new(|a| { let _ = a.emit_to("main", "cycle-overlay", 1i32); }));
-    bind(&s.hotkey_prev, Box::new(|a| { let _ = a.emit_to("main", "cycle-overlay", -1i32); }));
+    bind(&s.hotkey_toggle, "Toggle Overlay", Box::new(|a| overlay::toggle(a)));
+    bind(&s.hotkey_next, "Next Overlay", Box::new(|a| { let _ = a.emit_to("main", "cycle-overlay", 1i32); }));
+    bind(&s.hotkey_prev, "Previous Overlay", Box::new(|a| { let _ = a.emit_to("main", "cycle-overlay", -1i32); }));
     for (role, key) in s.layer_hotkeys {
-        bind(&key, Box::new(move |a| { let _ = a.emit_to("main", "toggle-layer-role", role.clone()); }));
+        let desc = format!("Layer {}", role);
+        bind(&key, &desc, Box::new(move |a| { let _ = a.emit_to("main", "toggle-layer-role", role.clone()); }));
     }
 }
 
@@ -240,8 +260,10 @@ pub fn spawn_game_watcher(app: AppHandle) {
                 if let Some(w) = app.get_webview_window(overlay::LABEL) {
                     if let Ok(h) = w.hwnd() {
                         if should_show {
-                            win32::show(h.0 as isize);
-                            last_shown = Some(true);
+                            if last_shown != Some(true) {
+                                win32::show(h.0 as isize);
+                                last_shown = Some(true);
+                            }
                         } else if last_shown != Some(false) {
                             win32::hide(h.0 as isize);
                             last_shown = Some(false);

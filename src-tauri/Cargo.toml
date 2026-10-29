@@ -1,12 +1,16 @@
 [package]
 name = "iris"
-version = "0.1.7"
+version = "0.1.8"
 description = "Iris Desktop HUD & Stream Overlay Manager"
 authors = ["Venus Visuals <support@veevisuals.art>"]
 homepage = "https://github.com/allnighter51/Iris"
 repository = "https://github.com/allnighter51/Iris"
 license = "MIT"
 edition = "2021"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
