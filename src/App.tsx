@@ -37,6 +37,7 @@ export default function App() {
     onAction?: () => void;
     secondaryActionLabel?: string;
     onSecondaryAction?: () => void;
+    persistent?: boolean;
   } | null>(null);
   const [settingsSubTab, setSettingsSubTab] = useState<SettingsTab | undefined>(undefined);
 
@@ -132,7 +133,27 @@ export default function App() {
         }
         setSettings(s);
         setMonitors(m);
-        if (u) setUpdateStatus(u);
+        if (u) {
+          setUpdateStatus(u);
+          if (u.status === "available") {
+            const ver = u.version;
+            setToast({
+              title: `✨ Iris Update v${ver} Available`,
+              sub: "Download & install now in a single click, or review release notes.",
+              actionLabel: "Update Now",
+              onAction: () => {
+                setUpdateStatus({ status: "downloading", version: ver, progress: 0, downloaded: 0 });
+                api.updaterDownloadAndInstall().catch(console.error);
+              },
+              secondaryActionLabel: "View Notes",
+              onSecondaryAction: () => {
+                setSettingsSubTab("system");
+                setTab("settings");
+              },
+              persistent: true,
+            });
+          }
+        }
         api.overlayGetFseStatus().then(setFseStatus).catch(() => {});
         setReady(true);
         const fetchVer = api.getAppVersion().catch(() => getVersion());
@@ -173,10 +194,14 @@ export default function App() {
         if (e.payload.status === "downloaded") {
           setToast({
             title: `✓ Iris v${e.payload.version} Ready to Apply`,
-            sub: "Update downloaded! Restart to apply changes.",
+            sub: "Update installed! Relaunching automatically, or click Restart Now.",
             actionLabel: "Restart Now",
             onAction: () => api.updaterRestart(),
+            persistent: true,
           });
+          setTimeout(() => {
+            api.updaterRestart().catch(() => {});
+          }, 1500);
         }
       }),
       listen<FseStatus>("overlay-fse-status", (e) => setFseStatus(e.payload)),
@@ -196,6 +221,7 @@ export default function App() {
             setSettingsSubTab("system");
             setTab("settings");
           },
+          persistent: true,
         });
       }),
     ];
@@ -419,7 +445,7 @@ export default function App() {
   }, [loadItem, recordUpload]);
 
   useEffect(() => {
-    if (!toast) return;
+    if (!toast || toast.persistent) return;
     const t = setTimeout(() => setToast(null), 5000);
     return () => clearTimeout(t);
   }, [toast]);
@@ -440,7 +466,7 @@ export default function App() {
 
   if (!vault || !settings) return <div className="boot">INITIALIZING IRIS…</div>;
   const activeItem = vault.items.find((i) => i.id === overlay.itemId) ?? null;
-  const hasUpdate = updateStatus.status === "available" || updateStatus.status === "downloaded";
+  const hasUpdate = updateStatus.status === "available" || updateStatus.status === "downloading" || updateStatus.status === "downloaded";
   const equippedName = live ? (vault.presets.find((p) => p.id === activePresetId)?.name || "Composite Loadout") : (activeItem?.name || null);
 
   return (
@@ -503,8 +529,8 @@ export default function App() {
             updateStatus={updateStatus}
             appVersion={appVersion}
             onCheckUpdate={() => api.updaterCheck().catch(console.error)}
-            onDownloadUpdate={() => api.updaterDownloadAndInstall().catch(console.error)}
-            onRestartUpdate={() => api.updaterRestart().catch(console.error)}
+            onDownloadUpdate={handleUpdateNow}
+            onRestartUpdate={handleRestartUpdate}
             monitors={monitors}
             currentMonitor={overlay.monitor}
             onSelectMonitor={(idx) => setOverlay((o) => ({ ...o, monitor: idx }))}

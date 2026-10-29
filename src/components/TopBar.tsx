@@ -205,13 +205,15 @@ export function TopBar({
         {updateStatus?.status === "available" && (
           <button
             type="button"
-            className="topbar-update-btn available pulse"
+            className="topbar-update-btn available"
             onClick={onUpdateNow}
-            title={`Iris v${updateStatus.version} is available. Click to download and install now.`}
+            title={`Iris v${updateStatus.version} is available! Click to download and install in 1 click.`}
           >
-            <span className="topbar-update-star">★</span>
-            <span className="topbar-update-label">Update to v{updateStatus.version}</span>
-            <span className="topbar-update-pill-action">Update Now</span>
+            <span className="topbar-update-btn-text">
+              <span className="topbar-update-star">★</span>
+              <span className="topbar-update-label">Update Available (v{updateStatus.version})</span>
+              <span className="topbar-update-pill-action">Update Now</span>
+            </span>
           </button>
         )}
 
@@ -224,9 +226,11 @@ export function TopBar({
               className="topbar-update-btn-progress-fill"
               style={{ width: `${Math.max(6, Math.min(100, updateStatus.progress))}%` }}
             />
-            <span className="topbar-update-star spin">⟳</span>
-            <span className="topbar-update-label">
-              Downloading v{updateStatus.version}... {updateStatus.progress.toFixed(0)}%
+            <span className="topbar-update-btn-text">
+              <span className="topbar-update-star spin">⟳</span>
+              <span className="topbar-update-label">
+                Downloading Update... {updateStatus.progress.toFixed(0)}%
+              </span>
             </span>
           </div>
         )}
@@ -234,13 +238,14 @@ export function TopBar({
         {updateStatus?.status === "downloaded" && (
           <button
             type="button"
-            className="topbar-update-btn downloaded pulse"
+            className="topbar-update-btn downloaded"
             onClick={onRestartUpdate}
-            title={`Iris v${updateStatus.version} downloaded! Click to restart and apply.`}
+            title={`Iris v${updateStatus.version} is ready! Click to restart and apply immediately.`}
           >
-            <span className="topbar-update-star">⚡</span>
-            <span className="topbar-update-label">Restart to Apply v{updateStatus.version}</span>
-            <span className="topbar-update-pill-action">Restart Now</span>
+            <span className="topbar-update-btn-text">
+              <span className="topbar-update-star">⚡</span>
+              <span className="topbar-update-label">Click to Restart &amp; Apply (v{updateStatus.version})</span>
+            </span>
           </button>
         )}
 

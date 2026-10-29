@@ -276,10 +276,10 @@ export function SettingsView({
   }, [runningProcesses, customTargets]);
 
   useEffect(() => {
-    if (activeTab === "system" && updateStatus.status === "idle" && onCheckUpdate) {
+    if (updateStatus.status === "idle" && onCheckUpdate) {
       onCheckUpdate();
     }
-  }, [activeTab, updateStatus.status, onCheckUpdate]);
+  }, [updateStatus.status, onCheckUpdate]);
 
   const hasUpdate = updateStatus.status === "available" || updateStatus.status === "downloaded" || updateStatus.status === "downloading";
   const displayVersion = appVersion
@@ -365,45 +365,27 @@ export function SettingsView({
                 <span className="settings-nav-badge-warn" title="Fullscreen Exclusive active">!</span>
               )}
               {item.id === "system" && hasUpdate && (
-                <span className="settings-nav-badge-new" title="Update Available">NEW</span>
+                <span className="settings-nav-badge-new" title="Update Available">UPDATE</span>
               )}
             </button>
           ))}
 
           <div className="settings-sidebar-footer">
-            <div className="settings-version-card">
+            <div
+              className={`settings-version-card${
+                updateStatus.status === "available"
+                  ? " has-update-card"
+                  : updateStatus.status === "downloading"
+                  ? " has-update-card downloading"
+                  : updateStatus.status === "downloaded"
+                  ? " has-update-card ready"
+                  : ""
+              }`}
+            >
               <div className="settings-version-top">
-                <span className="settings-version-title mono">{displayVersion ? `Iris v${displayVersion}` : "Iris"}</span>
-                {updateStatus.status === "available" && (
-                  <button
-                    type="button"
-                    className="settings-version-update-pill"
-                    onClick={() => {
-                      setActiveTab("system");
-                      setTimeout(() => {
-                        updateCardRef.current?.scrollIntoView({ behavior: "smooth" });
-                      }, 50);
-                    }}
-                    title={`Update available: v${updateStatus.version}. Click to review & install.`}
-                  >
-                    → v{updateStatus.version}
-                  </button>
-                )}
-                {updateStatus.status === "downloading" && (
-                  <span className="settings-version-update-pill downloading" title={`Downloading: ${updateStatus.progress.toFixed(0)}%`}>
-                    ↓ {updateStatus.progress.toFixed(0)}%
-                  </span>
-                )}
-                {updateStatus.status === "downloaded" && (
-                  <button
-                    type="button"
-                    className="settings-version-update-pill ready"
-                    onClick={onRestartUpdate}
-                    title={`v${updateStatus.version} is ready! Click to restart & apply`}
-                  >
-                    ⚡ v{updateStatus.version}
-                  </button>
-                )}
+                <span className="settings-version-title mono">
+                  {displayVersion ? `Iris v${displayVersion}` : "Iris"}
+                </span>
                 <span
                   className={`settings-update-dot ${hasUpdate ? "has-update" : updateStatus.status === "upToDate" ? "ok" : ""}`}
                   title={
@@ -419,9 +401,88 @@ export function SettingsView({
                   }
                 />
               </div>
-              <a href="https://github.com/allnighter51/Iris" target="_blank" rel="noreferrer" className="settings-repo-link mono">
-                github.com/allnighter51/Iris
-              </a>
+
+              {updateStatus.status === "available" && (
+                <div className="settings-version-update-box">
+                  <div className="settings-version-update-badge mono">
+                    ★ UPDATE AVAILABLE → v{updateStatus.version}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn primary small settings-version-action-btn"
+                    onClick={onDownloadUpdate}
+                    title={`Download and install Iris v${updateStatus.version} now`}
+                  >
+                    ↑ Update Now (v{updateStatus.version})
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-version-notes-link mono"
+                    onClick={() => {
+                      setActiveTab("system");
+                      setTimeout(() => {
+                        updateCardRef.current?.scrollIntoView({ behavior: "smooth" });
+                      }, 50);
+                    }}
+                  >
+                    View Release Notes →
+                  </button>
+                </div>
+              )}
+
+              {updateStatus.status === "downloading" && (
+                <div className="settings-version-update-box">
+                  <div className="settings-version-update-badge downloading mono">
+                    ↓ DOWNLOADING v{updateStatus.version}... {updateStatus.progress.toFixed(0)}%
+                  </div>
+                  <div className="settings-version-progress-track">
+                    <div
+                      className="settings-version-progress-fill"
+                      style={{ width: `${Math.max(6, Math.min(100, updateStatus.progress))}%` }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="settings-version-notes-link mono"
+                    onClick={() => setActiveTab("system")}
+                  >
+                    View Download Details →
+                  </button>
+                </div>
+              )}
+
+              {updateStatus.status === "downloaded" && (
+                <div className="settings-version-update-box">
+                  <div className="settings-version-update-badge ready mono">
+                    ⚡ READY TO APPLY → v{updateStatus.version}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn primary small settings-version-action-btn"
+                    onClick={onRestartUpdate}
+                    title={`Restart Iris to apply v${updateStatus.version}`}
+                  >
+                    ⚡ Click to Restart &amp; Apply
+                  </button>
+                </div>
+              )}
+
+              <div className="settings-version-footer-row">
+                <a href="https://github.com/allnighter51/Iris" target="_blank" rel="noreferrer" className="settings-repo-link mono">
+                  github.com/allnighter51/Iris
+                </a>
+                {!hasUpdate && (
+                  <button
+                    type="button"
+                    className="settings-version-check-link mono"
+                    disabled={updateStatus.status === "checking"}
+                    onClick={() => onCheckUpdate?.()}
+                    title="Check GitHub Releases for a newer version"
+                  >
+                    {updateStatus.status === "checking" ? "Checking..." : "Check Update"}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </aside>
@@ -1220,7 +1281,6 @@ export function SettingsView({
               <div
                 ref={updateCardRef}
                 className="settings-panel"
-                style={{ order: hasUpdate ? 1 : 2 }}
               >
                 <div className="settings-panel-head">
                   <h3 className="settings-panel-title">Updates &amp; Release Maintenance</h3>
@@ -1318,7 +1378,6 @@ export function SettingsView({
               {/* System & Storage Panel */}
               <div
                 className="settings-panel"
-                style={{ order: hasUpdate ? 2 : 1 }}
               >
                 <div className="settings-panel-head">
                   <h3 className="settings-panel-title">System &amp; Storage</h3>
