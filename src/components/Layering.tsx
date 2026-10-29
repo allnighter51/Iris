@@ -37,8 +37,6 @@ type Drag =
   | { mode: "crop"; id: string; edges: string }
   | null;
 
-type ZoomLevel = "fit" | 50 | 75 | 100 | 150 | 200;
-
 const SNAP_PX = 8;
 const visCrop = (fx: LayerFx) => ({
   L: fx.flipX ? fx.cropR : fx.cropL,
@@ -143,7 +141,7 @@ function LayerDrawer({ vault, onAdd }: { vault: VaultData; onAdd: (item: VaultIt
 export function Layering(p: Props) {
   const { vault, layers, setLayers, monitors, canvasRes } = p;
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [zoom, setZoom] = useState<ZoomLevel>("fit");
+  const [zoom, setZoom] = useState<number>(1.0);
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isSpaceDown, setIsSpaceDown] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
@@ -160,10 +158,18 @@ export function Layering(p: Props) {
   const [soloId, setSoloId] = useState<string | null>(null);
   const [chopPct, setChopPct] = useState(50);
 
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [viewportSize, setViewportSize] = useState<{ w: number; h: number }>({ w: 900, h: 420 });
   const stage = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag>(null);
   const customInput = useRef<HTMLInputElement>(null);
   const panStart = useRef<{ x: number; y: number; px: number; py: number }>({ x: 0, y: 0, px: 0, py: 0 });
+
+  const zoomRef = useRef(1.0);
+  zoomRef.current = zoom;
+  const panRef = useRef({ x: 0, y: 0 });
+  panRef.current = pan;
+  const isFitMode = useRef(true);
 
   // 50-step History Stack
   const [history, setHistory] = useState<Layer[][]>(() => [layers]);
@@ -184,6 +190,89 @@ export function Layering(p: Props) {
   const items = useMemo(() => new Map(vault.items.map((i) => [i.id, i])), [vault.items]);
   const sel = layers.find((l) => l.id === selectedId) ?? null;
   const activePreset = vault.presets.find((x) => x.id === p.activePresetId) ?? null;
+
+  // Track viewport container dimensions with ResizeObserver
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setViewportSize({ w: Math.round(width), h: Math.round(height) });
+        }
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Compute fixed-aspect-ratio artboard base fit size and centering offsets
+  const PADDING = 20; // 20px margin around artboard in Fit mode
+  const availW = Math.max(100, viewportSize.w - PADDING * 2);
+  const availH = Math.max(100, viewportSize.h - PADDING * 2);
+  const fitScale = Math.min(availW / W, availH / H);
+  const baseW = Math.max(1, Math.round(W * fitScale));
+  const baseH = Math.max(1, Math.round(H * fitScale));
+  const defaultPanX = Math.round((viewportSize.w - baseW) / 2);
+  const defaultPanY = Math.round((viewportSize.h - baseH) / 2);
+
+  // Keep artboard centered in Fit mode when viewport resizes or canvas resolution changes
+  useEffect(() => {
+    if (isFitMode.current) {
+      panRef.current = { x: defaultPanX, y: defaultPanY };
+      setPan({ x: defaultPanX, y: defaultPanY });
+    }
+  }, [defaultPanX, defaultPanY]);
+
+  // Non-passive wheel listener for focal cursor zoom (Ctrl+Wheel) and smooth pan (Wheel / Shift+Wheel)
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const isZoom = e.ctrlKey || e.metaKey;
+      if (isZoom) {
+        const rect = el.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        const curZoom = zoomRef.current;
+        const curPan = panRef.current;
+
+        const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+        const nextZoom = clamp(Math.round(curZoom * factor * 100) / 100, 0.25, 5.0);
+        if (nextZoom === curZoom) return;
+
+        const scaleRatio = nextZoom / curZoom;
+        const nextPanX = mouseX - (mouseX - curPan.x) * scaleRatio;
+        const nextPanY = mouseY - (mouseY - curPan.y) * scaleRatio;
+
+        isFitMode.current = false;
+        zoomRef.current = nextZoom;
+        panRef.current = { x: Math.round(nextPanX), y: Math.round(nextPanY) };
+        setZoom(nextZoom);
+        setPan(panRef.current);
+      } else {
+        const curPan = panRef.current;
+        const isHoriz = e.shiftKey;
+        const nextPan = {
+          x: isHoriz ? Math.round(curPan.x - e.deltaY) : Math.round(curPan.x - (e.deltaX || 0)),
+          y: isHoriz ? curPan.y : Math.round(curPan.y - e.deltaY),
+        };
+        isFitMode.current = false;
+        panRef.current = nextPan;
+        setPan(nextPan);
+      }
+    };
+
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", handleWheel);
+    };
+  }, []);
 
   // Push completed snapshot to history
   const commitHistory = useCallback((nextLayers: Layer[]) => {
@@ -483,20 +572,49 @@ export function Layering(p: Props) {
     );
   }, [selectedIds, selectedId, setLayers]);
 
-  const stepZoom = useCallback((dir: 1 | -1) => {
-    const levels: (50 | 75 | 100 | 150 | 200)[] = [50, 75, 100, 150, 200];
-    setZoom((cur) => {
-      if (cur === "fit") return dir > 0 ? 100 : 50;
-      const idx = levels.indexOf(cur);
-      const nextIdx = clamp(idx + dir, 0, levels.length - 1);
-      return levels[nextIdx];
-    });
-  }, []);
+  const zoomTo = useCallback(
+    (nextZoom: number, focalX?: number, focalY?: number) => {
+      const clamped = clamp(Math.round(nextZoom * 100) / 100, 0.25, 5.0);
+      const fx = focalX ?? viewportSize.w / 2;
+      const fy = focalY ?? viewportSize.h / 2;
+
+      const curZoom = zoomRef.current;
+      const curPan = panRef.current;
+      const scaleRatio = clamped / curZoom;
+      const nextPanX = fx - (fx - curPan.x) * scaleRatio;
+      const nextPanY = fy - (fy - curPan.y) * scaleRatio;
+
+      isFitMode.current = false;
+      zoomRef.current = clamped;
+      panRef.current = { x: Math.round(nextPanX), y: Math.round(nextPanY) };
+      setZoom(clamped);
+      setPan(panRef.current);
+    },
+    [viewportSize.w, viewportSize.h],
+  );
 
   const resetZoomFit = useCallback(() => {
-    setZoom("fit");
-    setPan({ x: 0, y: 0 });
-  }, []);
+    isFitMode.current = true;
+    zoomRef.current = 1.0;
+    panRef.current = { x: defaultPanX, y: defaultPanY };
+    setZoom(1.0);
+    setPan({ x: defaultPanX, y: defaultPanY });
+  }, [defaultPanX, defaultPanY]);
+
+  const stepZoom = useCallback(
+    (dir: 1 | -1) => {
+      const cur = zoomRef.current;
+      const steps = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0];
+      let next: number;
+      if (dir > 0) {
+        next = steps.find((s) => s > cur + 0.01) ?? clamp(cur * 1.25, 0.25, 5.0);
+      } else {
+        next = [...steps].reverse().find((s) => s < cur - 0.01) ?? clamp(cur / 1.25, 0.25, 5.0);
+      }
+      zoomTo(next);
+    },
+    [zoomTo],
+  );
 
   const boxOf = (l: Layer): Box | null => {
     const it = items.get(l.vaultItemId);
@@ -504,7 +622,8 @@ export function Layering(p: Props) {
   };
 
   const toMonitor = (cx: number, cy: number) => {
-    const r = stage.current!.getBoundingClientRect();
+    if (!stage.current) return { mx: 0, my: 0, k: 1 };
+    const r = stage.current.getBoundingClientRect();
     const k = r.width / W;
     return { mx: (cx - r.left) / k, my: (cy - r.top) / k, k };
   };
@@ -548,15 +667,30 @@ export function Layering(p: Props) {
   }
 
   function onPointerDown(e: React.PointerEvent) {
+    // Double middle-click resets to Fit
+    if (e.button === 1 && e.detail === 2) {
+      e.preventDefault();
+      resetZoomFit();
+      return;
+    }
+
     // Spacebar or Middle-mouse button pan
     if (e.button === 1 || (e.button === 0 && isSpaceDown)) {
       e.preventDefault();
       setIsPanning(true);
-      panStart.current = { x: pan.x, y: pan.y, px: e.clientX, py: e.clientY };
-      stage.current?.setPointerCapture(e.pointerId);
+      panStart.current = { x: panRef.current.x, y: panRef.current.y, px: e.clientX, py: e.clientY };
+      viewportRef.current?.setPointerCapture(e.pointerId);
       return;
     }
     if (e.button !== 0) return;
+
+    // Check whether click occurred inside the artboard
+    const artboardEl = stage.current;
+    const isInsideArtboard = artboardEl && (artboardEl === e.target || artboardEl.contains(e.target as Node));
+    if (!isInsideArtboard) {
+      selectLayer(null);
+      return;
+    }
 
     const { mx, my } = toMonitor(e.clientX, e.clientY);
     const target = e.target as HTMLElement;
@@ -564,7 +698,7 @@ export function Layering(p: Props) {
     const cropEdges = target.dataset.crop;
 
     if (cropEdges && sel && !sel.locked) {
-      stage.current!.setPointerCapture(e.pointerId);
+      viewportRef.current?.setPointerCapture(e.pointerId);
       isDraggingRef.current = true;
       initialDragLayers.current = layersRef.current;
       drag.current = { mode: "crop", id: sel.id, edges: cropEdges };
@@ -573,7 +707,7 @@ export function Layering(p: Props) {
     if (handle && sel && !sel.locked) {
       const b = boxOf(sel)!;
       const [hx, hy] = handle.split(",").map(Number);
-      stage.current!.setPointerCapture(e.pointerId);
+      viewportRef.current?.setPointerCapture(e.pointerId);
       isDraggingRef.current = true;
       initialDragLayers.current = layersRef.current;
       drag.current = { mode: "resize", id: sel.id, hx, ax: hx < 0 ? b.l + b.w : b.l, ay: hy < 0 ? b.t + b.h : b.t, cx: sel.x, cy: sel.y, scale: sel.scale, visW: b.w };
@@ -610,7 +744,7 @@ export function Layering(p: Props) {
         }
       }
       const members = layers.filter((l) => movingSet.has(l.id));
-      stage.current!.setPointerCapture(e.pointerId);
+      viewportRef.current?.setPointerCapture(e.pointerId);
       drag.current = {
         mode: "move",
         id: hit.id,
@@ -627,7 +761,10 @@ export function Layering(p: Props) {
     if (isPanning) {
       const dx = e.clientX - panStart.current.px;
       const dy = e.clientY - panStart.current.py;
-      setPan({ x: Math.round(panStart.current.x + dx), y: Math.round(panStart.current.y + dy) });
+      const nextPan = { x: Math.round(panStart.current.x + dx), y: Math.round(panStart.current.y + dy) };
+      isFitMode.current = false;
+      panRef.current = nextPan;
+      setPan(nextPan);
       return;
     }
 
@@ -680,8 +817,15 @@ export function Layering(p: Props) {
     }
   }
 
-  const endDrag = () => {
+  const endDrag = (e?: React.PointerEvent) => {
     if (isPanning) setIsPanning(false);
+    if (e && viewportRef.current?.hasPointerCapture(e.pointerId)) {
+      try {
+        viewportRef.current.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+    }
     drag.current = null;
     setGuides({ xs: [], ys: [] });
     if (isDraggingRef.current) {
@@ -704,18 +848,10 @@ export function Layering(p: Props) {
     if (hit && !hit.locked) {
       setSelectedIds([hit.id]);
       setTool("crop");
+    } else if (!hit) {
+      resetZoomFit();
     }
   };
-
-  const onWheelStage = useCallback(
-    (e: React.WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        stepZoom(e.deltaY < 0 ? 1 : -1);
-      }
-    },
-    [stepZoom],
-  );
 
   // Global Canva-Style Keyboard Shortcuts
   useEffect(() => {
@@ -933,8 +1069,6 @@ export function Layering(p: Props) {
     p.setCanvasRes(list[(((cur < 0 ? 0 : cur) + dir) % list.length + list.length) % list.length]);
   };
 
-  const stageWidth = zoom === "fit" ? "100%" : `${(W * zoom) / 100}px`;
-  const stageMaxWidth = zoom === "fit" ? `calc(50vh * (${W} / ${H}))` : undefined;
   const bgImage = ref === "custom" && customShot ? `url(${customShot})` : undefined;
   const previewLayers = soloId ? layers.map((l) => ({ ...l, visible: l.id === soloId })) : layers;
   const selBox = sel && sel.visible ? boxOf(sel) : null;
@@ -955,36 +1089,42 @@ export function Layering(p: Props) {
 
       <section className="layering-stage-section">
         <div
-          className={`lstage-container${isSpaceDown || isPanning ? " panning" : ""}`}
-          onWheel={onWheelStage}
+          ref={viewportRef}
+          className={`layering-viewport${isSpaceDown || isPanning ? " panning" : ""}`}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onAuxClick={(e) => {
+            if (e.button === 1 && e.detail === 2) {
+              e.preventDefault();
+              resetZoomFit();
+            }
+          }}
+          onDragOver={(e) => e.dataTransfer.types.includes("application/x-iris-item") && e.preventDefault()}
+          onDrop={(e) => {
+            const id = e.dataTransfer.getData("application/x-iris-item");
+            const it = items.get(id);
+            if (!it) return;
+            e.preventDefault();
+            const { mx, my } = toMonitor(e.clientX, e.clientY);
+            const newId = p.addLayer(it, { x: Math.round(mx - W / 2), y: Math.round(my - H / 2) });
+            setSelectedIds([newId]);
+          }}
         >
           <div
             ref={stage}
-            className={`stage lstage bracket bd-${ref === "grid" ? "grid" : "ref"}`}
+            className={`stage lstage layering-artboard bracket bd-${ref === "grid" ? "grid" : "ref"}`}
             style={{
-              width: stageWidth,
-              maxWidth: stageMaxWidth,
-              maxHeight: zoom === "fit" ? "50vh" : undefined,
+              width: `${baseW}px`,
+              height: `${baseH}px`,
               aspectRatio: `${W} / ${H}`,
               backgroundImage: bgImage,
               backgroundSize: "100% 100%",
-              transform: pan.x !== 0 || pan.y !== 0 ? `translate(${pan.x}px, ${pan.y}px)` : undefined,
+              transformOrigin: "0 0",
+              transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
             }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={endDrag}
-            onPointerCancel={endDrag}
             onDoubleClick={onDoubleClickStage}
-            onDragOver={(e) => e.dataTransfer.types.includes("application/x-iris-item") && e.preventDefault()}
-            onDrop={(e) => {
-              const id = e.dataTransfer.getData("application/x-iris-item");
-              const it = items.get(id);
-              if (!it) return;
-              e.preventDefault();
-              const { mx, my } = toMonitor(e.clientX, e.clientY);
-              const newId = p.addLayer(it, { x: Math.round(mx - W / 2), y: Math.round(my - H / 2) });
-              setSelectedIds([newId]);
-            }}
           >
             {ref === "custom" && !customShot && (
               <div className="empty-ref-prompt" onClick={() => customInput.current?.click()}>
@@ -1109,19 +1249,69 @@ export function Layering(p: Props) {
 
         <div className="layering-controls-dock card bracket">
           <div className="canvas-toolbar">
-            <div className="seg" title="Zoom levels (or Ctrl+Wheel / Ctrl+0 to Fit)">
-              {(["fit", 50, 100] as const).map((z) => (
+            <div className="zoom-seg" title="Zoom & Viewport controls (or Ctrl+Wheel / Ctrl+0 to Fit)">
+              <button
+                type="button"
+                className={`zoom-btn${isFitMode.current && Math.abs(zoom - 1.0) < 0.01 ? " active" : ""}`}
+                onClick={resetZoomFit}
+                title="Fit entire artboard to stage (Ctrl + 0)"
+              >
+                Fit
+              </button>
+
+              <div className="zoom-stepper">
                 <button
-                  key={z}
-                  className={zoom === z ? "active" : ""}
-                  onClick={() => { setZoom(z); if (z === "fit") setPan({ x: 0, y: 0 }); }}
+                  type="button"
+                  className="zoom-step-btn"
+                  onClick={() => stepZoom(-1)}
+                  disabled={zoom <= 0.25}
+                  title="Zoom Out (Ctrl + Minus)"
                 >
-                  {z === "fit" ? "Fit" : `${z}%`}
+                  −
                 </button>
-              ))}
-              {typeof zoom === "number" && zoom !== 50 && zoom !== 100 && (
-                <button className="active">{zoom}%</button>
-              )}
+                <button
+                  type="button"
+                  className={`zoom-val-btn${!isFitMode.current || Math.abs(zoom - 1.0) >= 0.01 ? " live" : ""}`}
+                  onClick={resetZoomFit}
+                  title="Live Zoom (click to reset to Fit)"
+                >
+                  {Math.round(zoom * 100)}%
+                </button>
+                <button
+                  type="button"
+                  className="zoom-step-btn"
+                  onClick={() => stepZoom(1)}
+                  disabled={zoom >= 5.0}
+                  title="Zoom In (Ctrl + Plus)"
+                >
+                  +
+                </button>
+              </div>
+
+              <button
+                type="button"
+                className={`zoom-btn${Math.abs(zoom - 0.5) < 0.01 ? " active" : ""}`}
+                onClick={() => zoomTo(0.5)}
+                title="50% Zoom"
+              >
+                50%
+              </button>
+              <button
+                type="button"
+                className={`zoom-btn${!isFitMode.current && Math.abs(zoom - 1.0) < 0.01 ? " active" : ""}`}
+                onClick={() => zoomTo(1.0)}
+                title="100% Zoom"
+              >
+                100%
+              </button>
+              <button
+                type="button"
+                className={`zoom-btn${Math.abs(zoom - 2.0) < 0.01 ? " active" : ""}`}
+                onClick={() => zoomTo(2.0)}
+                title="200% Zoom"
+              >
+                200%
+              </button>
             </div>
 
             <div className="tool-group" title="Undo / Redo (50-step History)">
@@ -1359,11 +1549,13 @@ function ShortcutsModal({ onClose }: { onClose: () => void }) {
     {
       title: "Canvas Viewport Navigation",
       items: [
-        { label: "Pan zoomed canvas", keys: ["Space", "Drag"] },
+        { label: "Pan canvas", keys: ["Space", "Drag"] },
         { label: "Middle-click pan", keys: ["Middle-Click", "Drag"] },
-        { label: "Smooth step zoom", keys: ["Ctrl", "Wheel"] },
+        { label: "Wheel scroll / Shift+Wheel", keys: ["Scroll / Shift+Scroll"] },
+        { label: "Canva-style focal zoom", keys: ["Ctrl", "Wheel"] },
         { label: "Zoom in / Zoom out", keys: ["Ctrl", "+ / -"] },
         { label: "Reset zoom to Fit", keys: ["Ctrl", "0"] },
+        { label: "Reset zoom to Fit (mouse)", keys: ["Double", "Middle-Click"] },
       ],
     },
   ];

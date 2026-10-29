@@ -376,11 +376,117 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14p
 
 /* Layering Upper Stage */
 .layering-stage-section { display: flex; flex-direction: column; width: 100%; flex: none; }
-.lstage-container { width: 100%; display: flex; justify-content: center; align-items: center; overflow: auto; margin-bottom: 8px; }
+.layering-viewport {
+  position: relative;
+  width: 100%;
+  height: clamp(380px, 46vh, 520px);
+  overflow: hidden;
+  user-select: none;
+  background-color: #07080d;
+  background-image:
+    radial-gradient(circle at 50% 50%, rgba(139, 92, 246, 0.04) 0%, transparent 75%),
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 100% 100%, 20px 20px, 20px 20px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  touch-action: none;
+  cursor: default;
+}
+.layering-viewport.panning { cursor: grab !important; }
+.layering-viewport.panning:active { cursor: grabbing !important; }
+.layering-artboard {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-height: none !important;
+  transform-origin: 0 0;
+  will-change: transform;
+  border-radius: 4px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.75), 0 0 0 1px rgba(6, 182, 212, 0.45);
+  overflow: hidden;
+  flex: none;
+  margin: 0;
+  cursor: default;
+}
 .lstage { cursor: default; margin: 0; flex: none; border-radius: 4px; }
 .lstage.bd-ref { background-color: #0b0c14; }
 .layering-controls-dock { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; flex: none; background: var(--card); }
 .layering-controls-dock .canvas-toolbar { padding: 0; background: none; }
+
+/* Zoom Controls Cluster */
+.zoom-seg {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--void2);
+}
+.zoom-seg .zoom-btn {
+  background: var(--void2);
+  border: 0;
+  color: var(--muted);
+  font: 600 12px var(--sans);
+  padding: 6px 11px;
+  cursor: pointer;
+  border-right: 1px solid var(--border);
+  transition: all 0.15s ease;
+}
+.zoom-seg .zoom-btn:last-child {
+  border-right: 0;
+}
+.zoom-seg .zoom-btn:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+}
+.zoom-seg .zoom-btn.active {
+  background: rgba(6, 182, 212, 0.14);
+  color: var(--cyan);
+}
+.zoom-stepper {
+  display: inline-flex;
+  align-items: center;
+  border-right: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.25);
+}
+.zoom-step-btn {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font: 700 13px var(--mono);
+  padding: 6px 9px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.zoom-step-btn:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+.zoom-step-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.zoom-val-btn {
+  background: none;
+  border: 0;
+  color: #cbd5e1;
+  font: 600 11.5px var(--mono);
+  padding: 6px 8px;
+  min-width: 48px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.zoom-val-btn:hover {
+  color: var(--cyan);
+  background: rgba(6, 182, 212, 0.12);
+}
+.zoom-val-btn.live {
+  color: var(--cyan);
+  font-weight: 700;
+}
 
 /* Layering 3-Column Bottom Workbench */
 .layering-workbench { display: grid; grid-template-columns: 1.2fr 1fr 1.1fr; gap: 16px; align-items: stretch; width: 100%; flex: none; }
@@ -415,8 +521,6 @@ input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14p
 .pill-action-btn.active-lock { color: var(--pink); }
 .pill-action-btn.pill-danger:hover { color: #fb7185; background: rgba(239, 68, 68, 0.15); }
 .pill-divider { width: 1px; height: 14px; background: rgba(255, 255, 255, 0.12); margin: 0 2px; }
-.lstage-container.panning { cursor: grab !important; }
-.lstage-container.panning:active { cursor: grabbing !important; }
 .layering-summary-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; margin-bottom: 2px; }
 .shortcuts-pill-btn { font-size: 11px; padding: 4px 12px; border-radius: 999px; border: 1px solid rgba(6, 182, 212, 0.35); color: var(--cyan); background: rgba(6, 182, 212, 0.08); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; transition: all 0.15s; flex-shrink: 0; }
 .shortcuts-pill-btn:hover { border-color: var(--cyan); background: rgba(6, 182, 212, 0.18); box-shadow: 0 0 12px rgba(6, 182, 212, 0.3); color: #fff; }
