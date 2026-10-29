@@ -16,7 +16,7 @@ import { TopBar } from "./components/TopBar";
 import { Vault } from "./components/Vault";
 import { Display } from "./components/Display";
 import { Layering } from "./components/Layering";
-import { SettingsView } from "./components/Settings";
+import { SettingsView, type SettingsTab } from "./components/Settings";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("vault");
@@ -30,7 +30,15 @@ export default function App() {
   const [currentForegroundExe, setCurrentForegroundExe] = useState<string | null>(null);
   const [fseStatus, setFseStatus] = useState<FseStatus>({ isFse: false, gameExe: null });
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ status: "idle" });
-  const [toast, setToast] = useState<{ title: string; sub: string; actionLabel?: string; onAction?: () => void } | null>(null);
+  const [toast, setToast] = useState<{
+    title: string;
+    sub: string;
+    actionLabel?: string;
+    onAction?: () => void;
+    secondaryActionLabel?: string;
+    onSecondaryAction?: () => void;
+  } | null>(null);
+  const [settingsSubTab, setSettingsSubTab] = useState<SettingsTab | undefined>(undefined);
 
   const vaultRef = useRef(vault); vaultRef.current = vault;
   const settingsRef = useRef(settings); settingsRef.current = settings;
@@ -160,17 +168,36 @@ export default function App() {
           return ls.map((l) => (l.role === e.payload ? { ...l, visible: show } : l));
         }),
       ),
-      listen<UpdateStatus>("updater-status", (e) => setUpdateStatus(e.payload)),
+      listen<UpdateStatus>("updater-status", (e) => {
+        setUpdateStatus(e.payload);
+        if (e.payload.status === "downloaded") {
+          setToast({
+            title: `✓ Iris v${e.payload.version} Ready to Apply`,
+            sub: "Update downloaded! Restart to apply changes.",
+            actionLabel: "Restart Now",
+            onAction: () => api.updaterRestart(),
+          });
+        }
+      }),
       listen<FseStatus>("overlay-fse-status", (e) => setFseStatus(e.payload)),
       listen<string>("navigate-tab", (e) => setTab(e.payload as Tab)),
-      listen<string>("updater-available-toast", (e) =>
+      listen<string>("updater-available-toast", (e) => {
+        const ver = typeof e.payload === "string" ? e.payload : String(e.payload);
         setToast({
-          title: `✨ Iris Update v${e.payload} Available`,
-          sub: "Review release notes & download in Settings.",
-          actionLabel: "View in Settings",
-          onAction: () => setTab("settings"),
-        }),
-      ),
+          title: `✨ Iris Update v${ver} Available`,
+          sub: "Download & install now in a single click, or review release notes.",
+          actionLabel: "Update Now",
+          onAction: () => {
+            setUpdateStatus((s) => (s.status === "available" ? { status: "downloading", version: ver, progress: 0, downloaded: 0 } : s));
+            api.updaterDownloadAndInstall().catch(console.error);
+          },
+          secondaryActionLabel: "View Notes",
+          onSecondaryAction: () => {
+            setSettingsSubTab("system");
+            setTab("settings");
+          },
+        });
+      }),
     ];
     return () => { subs.forEach((p) => p.then((f) => f())); };
   }, [updateUsage]);
@@ -290,6 +317,25 @@ export default function App() {
       elementType: "Full HUD",
     }, settingsRef.current?.telemetryEnabled ?? true);
   }, [activePresetId, recordSwap, status.gameRunning, saveSettings]);
+
+  const handleUpdateNow = useCallback(async () => {
+    try {
+      setUpdateStatus((s) => (s.status === "available" ? { status: "downloading", version: s.version, progress: 0, downloaded: 0 } : s));
+      await api.updaterDownloadAndInstall();
+    } catch (err) {
+      console.error("Failed to download and install update:", err);
+      setToast({
+        title: "Update Download Failed",
+        sub: String(err),
+        actionLabel: "Retry",
+        onAction: () => handleUpdateNow(),
+      });
+    }
+  }, []);
+
+  const handleRestartUpdate = useCallback(() => {
+    api.updaterRestart();
+  }, []);
 
   useEffect(() => {
     const un = listen<string | null>("foreground-process-changed", (e) => {
@@ -415,6 +461,9 @@ export default function App() {
         }}
         equippedName={equippedName}
         activeGame={status.activeGame}
+        updateStatus={updateStatus}
+        onUpdateNow={handleUpdateNow}
+        onRestartUpdate={handleRestartUpdate}
       />
       <main>
         {tab === "vault" && (
@@ -462,6 +511,8 @@ export default function App() {
             fseStatus={fseStatus}
             onDismissFse={() => setFseStatus({ isFse: false, gameExe: null })}
             status={status}
+            targetSubTab={settingsSubTab}
+            onClearTargetSubTab={() => setSettingsSubTab(undefined)}
           />
         )}
       </main>
@@ -472,10 +523,31 @@ export default function App() {
             <div className="toast-title">{toast.title}</div>
             <div className="toast-sub">{toast.sub}</div>
           </div>
-          {toast.actionLabel && toast.onAction && (
-            <button className="btn primary small" onClick={() => { toast.onAction!(); setToast(null); }}>{toast.actionLabel}</button>
+          {toast.secondaryActionLabel && toast.onSecondaryAction && (
+            <button
+              type="button"
+              className="btn outline small"
+              onClick={() => {
+                toast.onSecondaryAction!();
+                setToast(null);
+              }}
+            >
+              {toast.secondaryActionLabel}
+            </button>
           )}
-          <button className="btn outline small num-btn" onClick={() => setToast(null)}>✕</button>
+          {toast.actionLabel && toast.onAction && (
+            <button
+              type="button"
+              className="btn primary small"
+              onClick={() => {
+                toast.onAction!();
+                setToast(null);
+              }}
+            >
+              {toast.actionLabel}
+            </button>
+          )}
+          <button type="button" className="btn outline small num-btn" onClick={() => setToast(null)}>✕</button>
         </div>
       )}
     </div>

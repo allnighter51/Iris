@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, assetUrl } from "../api";
 import { ELEMENT_TAGS, KNOWN_GAMES, ROLES, type CompositePreset, type FseStatus, type MonitorInfo, type OverlayStatus, type Settings, type UpdateStatus, type VaultData, type VaultItem } from "../types";
 import { computeFavoriteOverlay, formatDuration, type UsageStats } from "../usage";
@@ -126,6 +126,8 @@ interface SettingsProps {
   fseStatus?: FseStatus;
   onDismissFse?: () => void;
   status?: OverlayStatus;
+  targetSubTab?: SettingsTab;
+  onClearTargetSubTab?: () => void;
 }
 
 export function SettingsView({
@@ -133,8 +135,23 @@ export function SettingsView({
   isTelemetryPaused, onToggleTelemetry, onResetTelemetry, onEquipItem, onEquipPreset,
   updateStatus = { status: "idle" }, appVersion, onCheckUpdate, onDownloadUpdate, onRestartUpdate,
   monitors = [], currentMonitor = 0, onSelectMonitor, fseStatus, onDismissFse, status,
+  targetSubTab, onClearTargetSubTab,
 }: SettingsProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("display");
+  const updateCardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (targetSubTab) {
+      setActiveTab(targetSubTab);
+      onClearTargetSubTab?.();
+      if (targetSubTab === "system") {
+        setTimeout(() => {
+          updateCardRef.current?.scrollIntoView({ behavior: "smooth" });
+        }, 60);
+      }
+    }
+  }, [targetSubTab, onClearTargetSubTab]);
+
   const [needsRestart, setNeedsRestart] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const [lastExternalExe, setLastExternalExe] = useState<string | null>(() => {
@@ -264,6 +281,7 @@ export function SettingsView({
     }
   }, [activeTab, updateStatus.status, onCheckUpdate]);
 
+  const hasUpdate = updateStatus.status === "available" || updateStatus.status === "downloaded" || updateStatus.status === "downloading";
   const displayVersion = appVersion
     || (updateStatus.status === "upToDate" || updateStatus.status === "available"
       ? updateStatus.currentVersion
@@ -346,6 +364,9 @@ export function SettingsView({
               {item.id === "display" && fseStatus?.isFse && (
                 <span className="settings-nav-badge-warn" title="Fullscreen Exclusive active">!</span>
               )}
+              {item.id === "system" && hasUpdate && (
+                <span className="settings-nav-badge-new" title="Update Available">NEW</span>
+              )}
             </button>
           ))}
 
@@ -353,11 +374,43 @@ export function SettingsView({
             <div className="settings-version-card">
               <div className="settings-version-top">
                 <span className="settings-version-title mono">{displayVersion ? `Iris v${displayVersion}` : "Iris"}</span>
+                {updateStatus.status === "available" && (
+                  <button
+                    type="button"
+                    className="settings-version-update-pill"
+                    onClick={() => {
+                      setActiveTab("system");
+                      setTimeout(() => {
+                        updateCardRef.current?.scrollIntoView({ behavior: "smooth" });
+                      }, 50);
+                    }}
+                    title={`Update available: v${updateStatus.version}. Click to review & install.`}
+                  >
+                    → v{updateStatus.version}
+                  </button>
+                )}
+                {updateStatus.status === "downloading" && (
+                  <span className="settings-version-update-pill downloading" title={`Downloading: ${updateStatus.progress.toFixed(0)}%`}>
+                    ↓ {updateStatus.progress.toFixed(0)}%
+                  </span>
+                )}
+                {updateStatus.status === "downloaded" && (
+                  <button
+                    type="button"
+                    className="settings-version-update-pill ready"
+                    onClick={onRestartUpdate}
+                    title={`v${updateStatus.version} is ready! Click to restart & apply`}
+                  >
+                    ⚡ v{updateStatus.version}
+                  </button>
+                )}
                 <span
-                  className={`settings-update-dot ${updateStatus.status === "available" ? "has-update" : updateStatus.status === "upToDate" ? "ok" : ""}`}
+                  className={`settings-update-dot ${hasUpdate ? "has-update" : updateStatus.status === "upToDate" ? "ok" : ""}`}
                   title={
                     updateStatus.status === "available"
                       ? `Update available: v${updateStatus.version}`
+                      : updateStatus.status === "downloaded"
+                      ? `Update ready to install: v${updateStatus.version}`
                       : updateStatus.status === "upToDate"
                       ? `Up to date (v${updateStatus.currentVersion})`
                       : updateStatus.status === "checking"
@@ -1115,31 +1168,60 @@ export function SettingsView({
 
           {activeTab === "system" && (
             <>
-              <div className="settings-panel">
-                <div className="settings-panel-head">
-                  <h3 className="settings-panel-title">System &amp; Storage</h3>
-                  <p className="settings-panel-desc">Configure boot behavior, background minimization, GPU compositing, and asset paths.</p>
+              {updateStatus.status === "available" && (
+                <div className="settings-update-banner">
+                  <div>
+                    <div className="settings-update-banner-title">
+                      <span style={{ color: "var(--emerald)" }}>★</span> Iris Update v{updateStatus.version} is Available
+                    </div>
+                    <div className="settings-update-banner-desc">
+                      Download and install the latest release in a single click.
+                    </div>
+                  </div>
+                  <button type="button" className="btn primary" onClick={onDownloadUpdate}>
+                    Update Now (v{updateStatus.version})
+                  </button>
                 </div>
+              )}
 
-                <SettingsRow title="Start minimized to tray on Windows boot" desc="Registers Iris in HKCU\...\Run with --minimized.">
-                  <Toggle checked={s.startWithWindows} onChange={(v) => save({ startWithWindows: v })} />
-                </SettingsRow>
-                <SettingsRow title="Close button minimizes to tray" desc="Keeps the overlay and hotkeys alive. Use the tray icon to quit.">
-                  <Toggle checked={s.closeToTray} onChange={(v) => save({ closeToTray: v })} />
-                </SettingsRow>
-                <SettingsRow title="Hardware Acceleration" desc="GPU-composited rendering. Requires application restart.">
-                  <Toggle checked={s.hardwareAcceleration} onChange={(v) => { setNeedsRestart(true); save({ hardwareAcceleration: v }); }} />
-                </SettingsRow>
-                <SettingsRow title="Low-Resource Mode" desc="Disables color filters on the overlay and slows background process polling.">
-                  <Toggle checked={s.lowResource} onChange={(v) => save({ lowResource: v })} />
-                </SettingsRow>
-                {needsRestart && <div className="note mono" style={{ margin: "10px 0" }}>&#x21BB; Restart Iris to apply the hardware acceleration change.</div>}
-                <SettingsRow title="Local Vault Directory" desc="PNG assets, thumbnails, vault_manifest.json and settings.json on your computer.">
-                  <button className="btn outline" onClick={() => api.openVaultDir()}>Open Vault Directory</button>
-                </SettingsRow>
-              </div>
+              {updateStatus.status === "downloading" && (
+                <div className="settings-update-banner">
+                  <div>
+                    <div className="settings-update-banner-title">
+                      <span style={{ color: "var(--cyan)" }}>↓</span> Downloading Iris v{updateStatus.version}...
+                    </div>
+                    <div className="settings-update-banner-desc">
+                      {updateStatus.progress.toFixed(0)}%{updateStatus.total ? ` (${(updateStatus.downloaded / (1024 * 1024)).toFixed(1)} / ${(updateStatus.total / (1024 * 1024)).toFixed(1)} MB)` : ""}
+                    </div>
+                  </div>
+                  <span className="tag mono" style={{ color: "var(--purple)", borderColor: "var(--purple)" }}>
+                    DOWNLOADING {updateStatus.progress.toFixed(0)}%
+                  </span>
+                </div>
+              )}
 
-              <div className="settings-panel">
+              {updateStatus.status === "downloaded" && (
+                <div className="settings-update-banner ready">
+                  <div>
+                    <div className="settings-update-banner-title">
+                      <span style={{ color: "var(--emerald)" }}>⚡</span> Iris v{updateStatus.version} Downloaded &amp; Ready
+                    </div>
+                    <div className="settings-update-banner-desc">
+                      The update is staged. Restart Iris to apply changes immediately.
+                    </div>
+                  </div>
+                  <button type="button" className="btn primary" onClick={onRestartUpdate}>
+                    Restart &amp; Apply Now
+                  </button>
+                </div>
+              )}
+
+              {/* Updates & Release Maintenance Panel */}
+              <div
+                ref={updateCardRef}
+                className="settings-panel"
+                style={{ order: hasUpdate ? 1 : 2 }}
+              >
                 <div className="settings-panel-head">
                   <h3 className="settings-panel-title">Updates &amp; Release Maintenance</h3>
                   <p className="settings-panel-desc">Official release channel, auto-updater telemetry, and GitHub release binaries.</p>
@@ -1156,6 +1238,16 @@ export function SettingsView({
                     {updateStatus.status === "available" && (
                       <span className="tag mono" style={{ color: "var(--cyan)", borderColor: "var(--cyan)", fontSize: "11px" }}>
                         ★ Update Available (v{updateStatus.version})
+                      </span>
+                    )}
+                    {updateStatus.status === "downloading" && (
+                      <span className="tag mono" style={{ color: "var(--purple)", borderColor: "var(--purple)", fontSize: "11px" }}>
+                        ↓ Downloading {updateStatus.progress.toFixed(0)}%
+                      </span>
+                    )}
+                    {updateStatus.status === "downloaded" && (
+                      <span className="tag mono ok" style={{ borderColor: "var(--emerald)", fontSize: "11px" }}>
+                        ✓ Ready to Install (v{updateStatus.version})
                       </span>
                     )}
                     {updateStatus.status === "checking" && (
@@ -1205,9 +1297,50 @@ export function SettingsView({
                   <button className="btn outline" disabled={updateStatus.status === "checking" || updateStatus.status === "downloading"} onClick={onCheckUpdate}>
                     {updateStatus.status === "checking" ? "Checking..." : "Check for Updates"}
                   </button>
-                  {updateStatus.status === "available" && <button className="btn primary" onClick={onDownloadUpdate}>Download in Background</button>}
-                  {updateStatus.status === "downloaded" && <button className="btn primary" onClick={onRestartUpdate}>Restart &amp; Update Now</button>}
+                  {updateStatus.status === "available" && (
+                    <button className="btn primary" onClick={onDownloadUpdate}>
+                      ★ Update Now (1-Click Install v{updateStatus.version})
+                    </button>
+                  )}
+                  {updateStatus.status === "downloading" && (
+                    <button className="btn primary" disabled>
+                      ↓ Downloading v{updateStatus.version}... {updateStatus.progress.toFixed(0)}%
+                    </button>
+                  )}
+                  {updateStatus.status === "downloaded" && (
+                    <button className="btn primary" onClick={onRestartUpdate}>
+                      ⚡ Restart &amp; Apply Now
+                    </button>
+                  )}
                 </div>
+              </div>
+
+              {/* System & Storage Panel */}
+              <div
+                className="settings-panel"
+                style={{ order: hasUpdate ? 2 : 1 }}
+              >
+                <div className="settings-panel-head">
+                  <h3 className="settings-panel-title">System &amp; Storage</h3>
+                  <p className="settings-panel-desc">Configure boot behavior, background minimization, GPU compositing, and asset paths.</p>
+                </div>
+
+                <SettingsRow title="Start minimized to tray on Windows boot" desc="Registers Iris in HKCU\...\Run with --minimized.">
+                  <Toggle checked={s.startWithWindows} onChange={(v) => save({ startWithWindows: v })} />
+                </SettingsRow>
+                <SettingsRow title="Close button minimizes to tray" desc="Keeps the overlay and hotkeys alive. Use the tray icon to quit.">
+                  <Toggle checked={s.closeToTray} onChange={(v) => save({ closeToTray: v })} />
+                </SettingsRow>
+                <SettingsRow title="Hardware Acceleration" desc="GPU-composited rendering. Requires application restart.">
+                  <Toggle checked={s.hardwareAcceleration} onChange={(v) => { setNeedsRestart(true); save({ hardwareAcceleration: v }); }} />
+                </SettingsRow>
+                <SettingsRow title="Low-Resource Mode" desc="Disables color filters on the overlay and slows background process polling.">
+                  <Toggle checked={s.lowResource} onChange={(v) => save({ lowResource: v })} />
+                </SettingsRow>
+                {needsRestart && <div className="note mono" style={{ margin: "10px 0" }}>&#x21BB; Restart Iris to apply the hardware acceleration change.</div>}
+                <SettingsRow title="Local Vault Directory" desc="PNG assets, thumbnails, vault_manifest.json and settings.json on your computer.">
+                  <button className="btn outline" onClick={() => api.openVaultDir()}>Open Vault Directory</button>
+                </SettingsRow>
               </div>
             </>
           )}

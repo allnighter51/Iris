@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { Tab } from "../types";
+import type { Tab, UpdateStatus } from "../types";
 import { Toggle } from "./ui";
 
 interface TopBarProps {
@@ -13,6 +13,9 @@ interface TopBarProps {
   onToggleOverlay?: (enabled: boolean) => void;
   equippedName?: string | null;
   activeGame?: string | null;
+  updateStatus?: UpdateStatus;
+  onUpdateNow?: () => void;
+  onRestartUpdate?: () => void;
 }
 
 const TABS: { id: Tab; label: string; desc: string; icon: ReactNode }[] = [
@@ -76,6 +79,9 @@ export function TopBar({
   onToggleOverlay,
   equippedName,
   activeGame,
+  updateStatus,
+  onUpdateNow,
+  onRestartUpdate,
 }: TopBarProps) {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const brandRef = useRef<HTMLDivElement>(null);
@@ -195,7 +201,50 @@ export function TopBar({
           : "○ STANDBY"}
       </div>
 
-      <nav className="tabs">
+      <div className="topbar-right">
+        {updateStatus?.status === "available" && (
+          <button
+            type="button"
+            className="topbar-update-btn available pulse"
+            onClick={onUpdateNow}
+            title={`Iris v${updateStatus.version} is available. Click to download and install now.`}
+          >
+            <span className="topbar-update-star">★</span>
+            <span className="topbar-update-label">Update to v{updateStatus.version}</span>
+            <span className="topbar-update-pill-action">Update Now</span>
+          </button>
+        )}
+
+        {updateStatus?.status === "downloading" && (
+          <div
+            className="topbar-update-btn downloading"
+            title={`Downloading Iris v${updateStatus.version}... ${updateStatus.progress.toFixed(0)}%`}
+          >
+            <div
+              className="topbar-update-btn-progress-fill"
+              style={{ width: `${Math.max(6, Math.min(100, updateStatus.progress))}%` }}
+            />
+            <span className="topbar-update-star spin">⟳</span>
+            <span className="topbar-update-label">
+              Downloading v{updateStatus.version}... {updateStatus.progress.toFixed(0)}%
+            </span>
+          </div>
+        )}
+
+        {updateStatus?.status === "downloaded" && (
+          <button
+            type="button"
+            className="topbar-update-btn downloaded pulse"
+            onClick={onRestartUpdate}
+            title={`Iris v${updateStatus.version} downloaded! Click to restart and apply.`}
+          >
+            <span className="topbar-update-star">⚡</span>
+            <span className="topbar-update-label">Restart to Apply v{updateStatus.version}</span>
+            <span className="topbar-update-pill-action">Restart Now</span>
+          </button>
+        )}
+
+        <nav className="tabs">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -222,6 +271,7 @@ export function TopBar({
           </button>
         ))}
       </nav>
+      </div>
     </header>
   );
 }

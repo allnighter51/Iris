@@ -1,6 +1,6 @@
 [package]
 name = "iris"
-version = "0.1.5"
+version = "0.1.6"
 description = "Iris Desktop HUD & Stream Overlay Manager"
 authors = ["Venus Visuals <support@veevisuals.art>"]
 homepage = "https://github.com/allnighter51/Iris"
